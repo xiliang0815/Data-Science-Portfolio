@@ -1,0 +1,56 @@
+---
+title: "Untitled"
+author: "Xi Liang"
+date: "6/19/2017"
+output: html_document
+---
+
+```{r, warning=TRUE, echo=FALSE, message=FALSE}
+need <- c("dplyr","leaps", "caret")
+have <- need %in% rownames(installed.packages())
+if(any(!have)) install.packages(need[!have])
+```
+
+```{r}
+library(dplyr)
+library(leaps)
+library(caret)
+```
+
+```{r}
+benz_train <- read.csv("data/train.csv") %>% tbl_df
+benz_test <- read.csv("data/test.csv")
+```
+
+
+## Feature Selection
+```{r}
+x = nearZeroVar(benz_train, saveMetrics = TRUE)
+to_keep <- which(x$zeroVar == FALSE)
+regsub_df <- benz_train[,to_keep]
+regsub_df$ID <- NULL
+regsub_df %>% ncol
+```
+
+### Forward Selection
+```{r}
+forward_model = regsubsets(y ~ ., data = regsub_df, method = "forward",  nvmax = NULL)
+forward_model_sum <- summary(forward_model)
+forward_model_sum$adjr2 %>% max
+```
+
+### Backward Selection
+```{r}
+backward_model = regsubsets(y ~ ., data = regsub_df, method = "backward",  nvmax = NULL)
+backward_model_sum <- summary(backward_model)
+backward_model_sum$adjr2 %>% max
+```
+
+```{r}
+backward_model$xnames
+```
+
+
+```{r}
+glmnet_ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 5, verboseIter = TRUE)
+```
