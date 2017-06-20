@@ -1,0 +1,611 @@
+---
+title: "Kaggle_Competition_Benz_EDA"
+author: "Xi Liang"
+date: "6/17/2017"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 5
+---
+
+## EDA
+```{r, warning=TRUE, echo=FALSE, message=FALSE}
+need <- c("dplyr", "ggplot2", "gridExtra", "tibble", "psych", "dendextend", "cluster", "caret", "reshape2")
+have <- need %in% rownames(installed.packages())
+if(any(!have)) install.packages(need[!have])
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(tibble)
+library(psych)
+library(dendextend)
+library(cluster)
+library(caret)
+library(reshape2)
+```
+
+```{r}
+benz_train <- read.csv("data/train.csv") %>% tbl_df
+```
+
+```{r}
+dim(benz_train)
+```
+
+This data contains 378 varaibles, with variable "y" reflecting the duration of specific car (variable "ID") undergone in order to pass quality insepection. There are 4209 samples in this data.
+
+```{r}
+str(benz_train)
+```
+
+Beside variables "ID" and "y", wee can see that varaibles from X0 to X8 are varaibles with more than two levels. The other variables are binary varaibles with two level (0 and 1).
+
+```{r}
+apply(benz_train, 2, is.na) %>% table
+```
+
+We can see that there is no missing information in this data.
+
+### Response varaible ("y")
+Here we can see the distribution of our response varaible "y", time that a specific vehicle took to pass inspection after being manufactured. 
+
+```{r}
+summary(benz_train$y)
+```
+
+```{r}
+par(mfrow = c(2,2))
+
+hist(benz_train$y)
+
+boxplot(benz_train$y)
+
+qqnorm(scale(benz_train$y))
+qqline(scale(benz_train$y))
+
+plot(density(scale(benz_train$y)))
+```
+
+The distribution of the response varaible is somewhat normally distrbuted (median is approximately equaly to the mean), with some outliers.
+
+#### Outliers in the response varaible
+```{r}
+y_pt75_quantile <- quantile(benz_train$y, 0.75)
+y_pt75_quantile
+
+outlier_index <- benz_train$y > y_pt75_quantile %>% unlist %>% as.numeric()
+y_outliers <- benz_train[outlier_index,]
+
+nrow(y_outliers)
+```
+
+Around 25% of the sample in this data can be categorized as outliers.
+
+```{r}
+y_outliers$y %>% summary
+```
+
+Now we know the range of the outliers, we will take at look them later when we get to the predictors to try to figure out what could be the factors causing the much longer time that a vehicle stay in inspection progress.
+
+### Predictors
+
+#### Categorical Variables with multiple levels
+
+In this data, we have 9 categorical variables with multiple levels, they are listed as below:
+```{r}
+cat_multi <- benz_train %>% select(X0:X8)
+summary(cat_multi)
+```
+
+Here are the unique levels in each variable:
+```{r}
+apply(cat_multi, 2, unique)
+```
+
+##### X0
+```{r}
+X0_plt1 <- ggplot(benz_train, aes(X0)) +
+  geom_bar(aes(fill = factor(X0))) +
+  theme(legend.position = "none")
+
+X0_plt2 <- ggplot(benz_train, aes(X0, y)) + 
+  geom_boxplot(aes(fill = factor(X0))) +
+  geom_hline(yintercept = median(benz_train$y)) +
+  theme(legend.position = "none")
+
+grid.arrange(X0_plt1, X0_plt2)
+```
+
+There are multiple levels in "X0" variable have medians higher than the median in variable "y", implying that cars belong to these specific levels could increase their inspection time. In addition, most of the samples fall into these levels (> 100 samples):
+```{r}
+which(table(benz_train$X0) > 100) %>% names
+```
+
+##### X1
+```{r}
+X1_plt1 <- ggplot(benz_train, aes(X1)) +
+  geom_bar(aes(fill = factor(X1))) +
+  theme(legend.position = "none")
+
+X1_plt2 <- ggplot(benz_train, aes(X1, y)) + 
+  geom_boxplot(aes(fill = factor(X1))) +
+  geom_hline(yintercept = median(benz_train$y)) +
+  theme(legend.position = "none")
+
+grid.arrange(X1_plt1, X1_plt2)
+```
+
+Unlike varaible X0, all of the levels in variable X1 has median inpect duration close to the population median. We also observe some possible trend between X0 and X1, most of the levels in X0 are also in X1, at this point, we speculate these two variables might be related to each other, since levels that have high count in X0 have low count in X1 (if levels exist in both of the variables).
+```{r}
+X0_df <- table(benz_train$X0) %>% as.data.frame()
+```
+
+```{r}
+X1_df <- table(benz_train$X1) %>% as.data.frame()
+```
+
+```{r}
+X0_X1_df <- merge(X0_df, X1_df, by = "Var1", all.x = TRUE)
+```
+
+```{r}
+plot(X0_X1_df$Freq.x, X0_X1_df$Freq.y)
+```
+
+##### X2
+```{r}
+X2_plt1 <- ggplot(benz_train, aes(X2)) +
+  geom_bar(aes(fill = factor(X2))) +
+  theme(legend.position = "none")
+
+X2_plt2 <- ggplot(benz_train, aes(X2, y)) + 
+  geom_boxplot(aes(fill = factor(X2))) +
+  geom_hline(yintercept = median(benz_train$y)) +
+  theme(legend.position = "none")
+
+grid.arrange(X2_plt1, X2_plt2)
+```
+
+In this variable, most samples exisit in a only few levels, with 39% of the sample falling into level "as".
+```{r}
+table(benz_train$X2) %>% prop.table() %>% sort (decreasing = TRUE) %>% head
+```
+
+##### X3
+```{r}
+X3_plt1 <- ggplot(benz_train, aes(X3)) +
+  geom_bar(aes(fill = factor(X3))) +
+  theme(legend.position = "none")
+
+X3_plt2 <- ggplot(benz_train, aes(X3, y)) + 
+  geom_violin(aes(fill = factor(X3))) +
+  geom_hline(yintercept = median(benz_train$y)) +
+  theme(legend.position = "none")
+
+grid.arrange(X3_plt1, X3_plt2)
+```
+
+As we can see, most of the vehicle fall into levels "c" and "f" in variable "X3".
+
+##### X4
+```{r}
+X4_plt1 <- ggplot(benz_train, aes(X4)) +
+  geom_bar(aes(fill = factor(X4))) +
+  theme(legend.position = "none")
+
+X4_plt2 <- ggplot(benz_train, aes(X4, y)) + 
+  geom_boxplot(aes(fill = factor(X4))) +
+  geom_hline(yintercept = median(benz_train$y)) +
+  theme(legend.position = "none")
+
+grid.arrange(X4_plt1, X4_plt2)
+```
+
+Most of the cars (4205 cars) fall into level "d" in variable X4.
+
+##### X5
+```{r}
+X5_plt1 <- ggplot(benz_train, aes(X5)) +
+  geom_bar(aes(fill = factor(X5))) +
+  theme(legend.position = "none")
+
+X5_plt2 <- ggplot(benz_train, aes(X5, y)) + 
+  geom_boxplot(aes(fill = factor(X5))) +
+  geom_hline(yintercept = median(benz_train$y)) +
+  theme(legend.position = "none")
+
+grid.arrange(X5_plt1, X5_plt2)
+```
+
+Most of the sample in variable X5 fall into different levels evenly, except for levels "f", "g", "h", "o", "u", "x", and "y".
+
+##### X6
+```{r}
+X6_plt1 <- ggplot(benz_train, aes(X6)) +
+  geom_bar(aes(fill = factor(X6))) +
+  theme(legend.position = "none")
+
+X6_plt2 <- ggplot(benz_train, aes(X6, y)) + 
+  geom_violin(aes(fill = factor(X6))) +
+  geom_hline(yintercept = median(benz_train$y)) +
+  theme(legend.position = "none")
+
+grid.arrange(X6_plt1, X6_plt2)
+```
+
+
+##### X8
+```{r}
+X8_plt1 <- ggplot(benz_train, aes(X8)) +
+  geom_bar(aes(fill = factor(X8))) +
+  theme(legend.position = "none")
+
+X8_plt2 <- ggplot(benz_train, aes(X8, y)) + 
+  geom_boxplot(aes(fill = factor(X8))) +
+  geom_hline(yintercept = median(benz_train$y)) +
+  theme(legend.position = "none")
+
+grid.arrange(X8_plt1, X8_plt2)
+```
+
+Just like variable "X6", cars evenly fall into all the levels within this variable.
+
+#### Categorical Variables with 2 levels
+```{r}
+cat_var_bi <- benz_train %>% select(X10:X385)
+
+cat_var_bi[,names(cat_var_bi)] <- lapply(cat_var_bi[,names(cat_var_bi)],as.factor)
+```
+
+```{r}
+binary_freq_df <- data.frame(variable_names = names(cat_var_bi), 
+                             one_pct = rep(0, ncol(cat_var_bi)), 
+                             zero_pct = rep(0, ncol(cat_var_bi)),
+                             one_median_time =  rep(0, ncol(cat_var_bi)),
+                             zero_median_time =  rep(0, ncol(cat_var_bi)))
+
+for (i in 1:ncol(cat_var_bi)) {
+  one_pct <- sum(as.numeric(unlist(cat_var_bi[,i]))-1) / nrow(cat_var_bi)
+  zero_pct <- 1 - one_pct
+  zero_index <- which(cat_var_bi[,i] == "0")
+  one_index <- which(cat_var_bi[,i] == "1")
+  binary_freq_df$one_pct[i] <- binary_freq_df$one_pct[i] + one_pct
+  binary_freq_df$zero_pct[i] <- binary_freq_df$zero_pct[i] + zero_pct
+  binary_freq_df$zero_median_time[i] <- median(benz_train$y[zero_index])
+  binary_freq_df$one_median_time[i] <- median(benz_train$y[one_index])
+}
+```
+
+Here we will contruct a table with the porportion of binary input in each variable, from X10 to X385, and as well as their median times. With this information, we can observe how the median time move, either up or down, along with the porprotion of the binary input in specific variables.
+
+By plotting the variables in the dataframe with each other, we see that higher the percentage of zeros in the data, the shorter the median time. In addtion, we see that it is around the median of the distribution of "one_median_time" (around 100), we have the lowest "zero_pct". Also, we observe that there are large portion of variables have high percentage of "1"s, we will need to check if those variables have zero variance later.
+```{r}
+pairs.panels(binary_freq_df[c("one_pct", "one_median_time", "zero_pct", "zero_median_time")])
+```
+
+Comparing the median time of binary input 1 and 0 in each variable, we find a handful of them that have relatively large difference between each other, so we take the absolute value of their difference and plot a histogram as follow:
+```{r}
+hist(abs(binary_freq_df$zero_median_time - binary_freq_df$one_median_time), breaks = 100)
+```
+
+We choose the cut of value equals to 10 and treat the difference in time more than 10 as important. As we can see, among these variables, the higher the percentage of input "1" usually indicates a higher median time, vice versa.
+```{r}
+tmp_index <- which(binary_freq_df$zero_median_time - binary_freq_df$one_median_time > 10)
+tmp_df <- binary_freq_df[tmp_index,]
+
+ggplot(tmp_df, aes(one_pct, one_median_time)) + geom_point() + geom_smooth()
+```
+
+These variables are:
+```{r}
+binary_freq_df$variable_names[tmp_index]
+```
+
+
+### PCA on binary categorical data
+```{r}
+cat_var_bi <- benz_train %>% select(X10:X385)
+
+#remove near-zero variance before pca
+nzv <- nearZeroVar(cat_var_bi, saveMetrics = TRUE)
+cat_var_bi_nzv <- cat_var_bi[,which(nzv$zeroVar == FALSE)]
+cat_var_bi_nzv %>% dim
+```
+
+Peforming both PCA and FA to see how many PC/Factors we need to extract.
+```{r}
+cat_bi_cor <- cor(cat_var_bi_nzv)
+fa.parallel(cat_bi_cor, n.obs = 4209, fa ="both", n.iter = 100 )
+```
+
+```{r}
+PCA <- principal(cat_bi_cor, nfactors = 100, rotate = "none")
+PCA
+```
+
+First 100 PCs accounts for 86% of the variance in the data.
+
+```{r}
+spider(y = c(1:10), x= 1:80, data = cat_bi_cor, fill = TRUE)
+```
+
+### Clustering analysis
+In this section, we will perform clustering analysis with different distance, we will then pick the most optimal one and try to observe the relationship between the clusters and the time.
+
+```{r, message= FALSE, warning=FALSE}
+cluster_avg <- benz_train %>% daisy() %>% hclust(method = "average")
+plot(cluster_avg, cex = 0.2, labels = FALSE)
+```
+
+```{r}
+cluster_single <- benz_train %>% daisy() %>% hclust(method = "single")
+plot(cluster_single, cex = 0.2, labels = FALSE)
+```
+
+```{r}
+cluster_complete <- benz_train %>% daisy() %>% hclust(method = "complete") 
+plot(cluster_complete, cex = 0.2, labels = FALSE)
+```
+
+```{r}
+cluster_cent <- benz_train %>% daisy() %>% hclust(method = "centroid")
+plot(cluster_cent, cex = 0.2)
+```
+
+```{r}
+cluster_ward <- benz_train %>% daisy() %>% hclust(method = "ward")
+plot(cluster_ward, cex = 0.2, labels = FALSE)
+```
+
+#### Determine the optimal cluster for complete linkage
+```{r}
+plot(1:3000, sort(cluster_complete$height, decreasing = TRUE)[1:3000],
+     type = "l", ylim = c(0,0.4))
+abline(v=c(200,300,400,500), col = "red")
+```
+
+```{r, warning= FALSE}
+cluster_complete_cut_300 <- cutree(cluster_complete, k = 300)
+table(cluster_complete_cut_300)
+```
+
+#### Addressing the relationship between outliers and clusters
+Here we will take a look which clusters mean in y are larger than the population mean
+```{r}
+complete_cut_300_time <- aggregate(benz_train$y, by = list(cluster = cluster_complete_cut_300), mean)
+cluster_outliers <- complete_cut_300_time$cluster[which(complete_cut_300_time$x > mean(complete_cut_300_time$x))]
+cluster_outliers
+```
+
+```{r}
+complete_cut_300_df <- data.frame(time= benz_train$y, cluster = cluster_complete_cut_300)
+```
+
+```{r}
+complete_cut_300_df %>% arrange(desc(time))
+table(complete_cut_300_df[which(complete_cut_300_df$cluster %in% cluster_outliers),]$cluster) %>% sort (decreasing = TRUE)
+```
+
+Here are all the clusters that have average inspection time higher than the population mean. It is worth to dig a little bit deeper to see the characterstics of these cluster.
+```{r}
+train_df_w_cluster <- benz_train
+train_df_w_cluster$y <- benz_train$y
+train_df_w_cluster$cluster <- cluster_complete_cut_300
+train_df_w_cluster$ID <- NULL
+train_df_w_cluster_y <- train_df_w_cluster$y
+train_df_w_cluster$y <- NULL
+
+train_df_w_cluster_outlier <- train_df_w_cluster[which(train_df_w_cluster$cluster %in% cluster_outliers), ]
+train_df_w_cluster_nonout <- train_df_w_cluster[which(!train_df_w_cluster$cluster %in% cluster_outliers), ]
+
+```
+
+
+```{r}
+binary_freq_cluster_df <- data.frame(variable_names = names(train_df_w_cluster_outlier), 
+                             one_pct = rep(0, ncol(train_df_w_cluster_outlier)), 
+                             zero_pct = rep(0, ncol(train_df_w_cluster_outlier)),
+                             one_median_time =  rep(0, ncol(train_df_w_cluster_outlier)),
+                             zero_median_time =  rep(0, ncol(train_df_w_cluster_outlier)))
+
+for (i in 9:(ncol(train_df_w_cluster_outlier)-1)) {
+  one_pct <- sum(train_df_w_cluster_outlier[,i]) / nrow(train_df_w_cluster_outlier)
+  zero_pct <- 1 - one_pct
+  zero_index <- which(train_df_w_cluster_outlier[,i] == "0")
+  one_index <- which(train_df_w_cluster_outlier[,i] == "1")
+  binary_freq_cluster_df$one_pct[i-8] <- round(one_pct,3)
+  binary_freq_cluster_df$zero_pct[i-8] <- round(zero_pct,3)
+  binary_freq_cluster_df$zero_median_time[i-8] <- median(train_df_w_cluster_y[zero_index])
+  binary_freq_cluster_df$one_median_time[i-8] <- median(train_df_w_cluster_y[one_index])
+}
+```
+
+#### X0
+```{r}
+nonoutlier_X0_tmp <- data.frame(non = prop.table(table(train_df_w_cluster_nonout$X0)))
+names(nonoutlier_X0_tmp) <- c("variable_names", "non_freq")
+outlier_X0_tmp <- data.frame(outlier = prop.table(table(train_df_w_cluster_outlier$X0)))
+names(outlier_X0_tmp) <- c("variable_names", "out_freq")
+
+non_vs_out_X0 <- merge(nonoutlier_X0_tmp, outlier_X0_tmp, all.x = TRUE) %>% melt
+
+ggplot(non_vs_out_X0, aes(x = variable_names, value, fill = factor(variable))) +
+  geom_bar(position="dodge", stat="identity") +
+  coord_flip()
+
+rm(nonoutlier_X0_tmp)
+rm(outlier_X0_tmp)
+```
+
+#### X1
+```{r}
+nonoutlier_X1_tmp <- data.frame(non = prop.table(table(train_df_w_cluster_nonout$X1)))
+names(nonoutlier_X1_tmp) <- c("variable_names", "non_freq")
+outlier_X1_tmp <- data.frame(outlier = prop.table(table(train_df_w_cluster_outlier$X1)))
+names(outlier_X1_tmp) <- c("variable_names", "out_freq")
+
+non_vs_out_X1 <- merge(nonoutlier_X1_tmp, outlier_X1_tmp, all.x = TRUE) %>% melt
+
+ggplot(non_vs_out_X1, aes(x = variable_names, value, fill = factor(variable))) +
+  geom_bar(position="dodge", stat="identity") +
+  coord_flip()
+
+rm(nonoutlier_X1_tmp)
+rm(outlier_X1_tmp)
+```
+
+#### X2
+```{r}
+nonoutlier_X2_tmp <- data.frame(non = prop.table(table(train_df_w_cluster_nonout$X2)))
+names(nonoutlier_X2_tmp) <- c("variable_names", "non_freq")
+outlier_X2_tmp <- data.frame(outlier = prop.table(table(train_df_w_cluster_outlier$X2)))
+names(outlier_X2_tmp) <- c("variable_names", "out_freq")
+
+non_vs_out_X2 <- merge(nonoutlier_X2_tmp, outlier_X2_tmp, all.x = TRUE) %>% melt
+
+ggplot(non_vs_out_X2, aes(x = variable_names, value, fill = factor(variable))) +
+  geom_bar(position="dodge", stat="identity") +
+  coord_flip()
+
+rm(nonoutlier_X2_tmp)
+rm(outlier_X2_tmp)
+```
+
+#### X3
+```{r}
+nonoutlier_X3_tmp <- data.frame(non = prop.table(table(train_df_w_cluster_nonout$X3)))
+names(nonoutlier_X3_tmp) <- c("variable_names", "non_freq")
+outlier_X3_tmp <- data.frame(outlier = prop.table(table(train_df_w_cluster_outlier$X3)))
+names(outlier_X3_tmp) <- c("variable_names", "out_freq")
+
+non_vs_out_X3 <- merge(nonoutlier_X3_tmp, outlier_X3_tmp, all.x = TRUE) %>% melt
+
+ggplot(non_vs_out_X3, aes(x = variable_names, value, fill = factor(variable))) +
+  geom_bar(position="dodge", stat="identity") +
+  coord_flip()
+
+rm(nonoutlier_X3_tmp)
+rm(outlier_X3_tmp)
+```
+
+#### X4
+```{r}
+nonoutlier_X4_tmp <- data.frame(non = prop.table(table(train_df_w_cluster_nonout$X4)))
+names(nonoutlier_X4_tmp) <- c("variable_names", "non_freq")
+outlier_X4_tmp <- data.frame(outlier = prop.table(table(train_df_w_cluster_outlier$X4)))
+names(outlier_X4_tmp) <- c("variable_names", "out_freq")
+
+non_vs_out_X4 <- merge(nonoutlier_X4_tmp, outlier_X4_tmp, all.x = TRUE) %>% melt
+
+ggplot(non_vs_out_X4, aes(x = variable_names, value, fill = factor(variable))) +
+  geom_bar(position="dodge", stat="identity") +
+  coord_flip()
+
+rm(nonoutlier_X4_tmp)
+rm(outlier_X4_tmp)
+```
+
+#### X5
+```{r}
+nonoutlier_X5_tmp <- data.frame(non = prop.table(table(train_df_w_cluster_nonout$X5)))
+names(nonoutlier_X5_tmp) <- c("variable_names", "non_freq")
+outlier_X5_tmp <- data.frame(outlier = prop.table(table(train_df_w_cluster_outlier$X5)))
+names(outlier_X5_tmp) <- c("variable_names", "out_freq")
+
+non_vs_out_X5 <- merge(nonoutlier_X5_tmp, outlier_X5_tmp, all.x = TRUE) %>% melt
+
+ggplot(non_vs_out_X5, aes(x = variable_names, value, fill = factor(variable))) +
+  geom_bar(position="dodge", stat="identity") +
+  coord_flip()
+
+rm(nonoutlier_X5_tmp)
+rm(outlier_X5_tmp)
+```
+
+#### X6
+```{r}
+nonoutlier_X6_tmp <- data.frame(non = prop.table(table(train_df_w_cluster_nonout$X6)))
+names(nonoutlier_X6_tmp) <- c("variable_names", "non_freq")
+outlier_X6_tmp <- data.frame(outlier = prop.table(table(train_df_w_cluster_outlier$X6)))
+names(outlier_X6_tmp) <- c("variable_names", "out_freq")
+
+non_vs_out_X6 <- merge(nonoutlier_X6_tmp, outlier_X6_tmp, all.x = TRUE) %>% melt
+
+ggplot(non_vs_out_X6, aes(x = variable_names, value, fill = factor(variable))) +
+  geom_bar(position="dodge", stat="identity") +
+  coord_flip()
+
+rm(nonoutlier_X6_tmp)
+rm(outlier_X6_tmp)
+```
+
+#### X8
+```{r}
+nonoutlier_X8_tmp <- data.frame(non = prop.table(table(train_df_w_cluster_nonout$X8)))
+names(nonoutlier_X8_tmp) <- c("variable_names", "non_freq")
+outlier_X8_tmp <- data.frame(outlier = prop.table(table(train_df_w_cluster_outlier$X8)))
+names(outlier_X8_tmp) <- c("variable_names", "out_freq")
+
+non_vs_out_X8 <- merge(nonoutlier_X8_tmp, outlier_X8_tmp, all.x = TRUE) %>% melt
+
+ggplot(non_vs_out_X8, aes(x = variable_names, value, fill = factor(variable))) +
+  geom_bar(position="dodge", stat="identity") +
+  coord_flip()
+
+rm(nonoutlier_X8_tmp)
+rm(outlier_X8_tmp)
+```
+
+#### Binary Variable
+```{r}
+binary_freq_nonout_df <- data.frame(variable_names = names(train_df_w_cluster_nonout), 
+                             one_pct = rep(0, ncol(train_df_w_cluster_nonout)), 
+                             zero_pct = rep(0, ncol(train_df_w_cluster_nonout))
+                             )
+                             
+
+for (i in 9:(ncol(train_df_w_cluster_nonout)-1)) {
+  one_pct <- sum(train_df_w_cluster_nonout[,i]) / nrow(train_df_w_cluster_nonout)
+  zero_pct <- 1 - one_pct
+  binary_freq_nonout_df$one_pct[i-8] <- round(one_pct,3)
+  binary_freq_nonout_df$zero_pct[i-8] <- round(zero_pct,3)
+}
+```
+
+```{r}
+binary_freq_out_df <- data.frame(variable_names = names(train_df_w_cluster_outlier), 
+                             one_pct = rep(0, ncol(train_df_w_cluster_outlier)), 
+                             zero_pct = rep(0, ncol(train_df_w_cluster_outlier))
+                             )
+                             
+
+for (i in 9:(ncol(train_df_w_cluster_outlier)-1)) {
+  one_pct <- sum(train_df_w_cluster_outlier[,i]) / nrow(train_df_w_cluster_outlier)
+  zero_pct <- 1 - one_pct
+  binary_freq_out_df$one_pct[i-8] <- round(one_pct,3)
+  binary_freq_out_df$zero_pct[i-8] <- round(zero_pct,3)
+}
+```
+
+```{r}
+non_vs_out <- merge(binary_freq_nonout_df, binary_freq_out_df, by = "variable_names", all.x = TRUE)
+```
+
+```{r, echo=FALSE}
+non_vs_out$zero_pct.x <- NULL
+non_vs_out$zero_pct.y <- NULL
+non_vs_out <- non_vs_out[-c(1,2),] %>% melt
+
+```
+
+
+```{r}
+ggplot(non_vs_out, aes(variable_names, value, fill = factor(variable))) +
+  geom_bar(position="dodge", stat="identity") +
+  coord_flip()
+```
+
