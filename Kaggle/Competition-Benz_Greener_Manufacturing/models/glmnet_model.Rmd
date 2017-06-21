@@ -25,6 +25,17 @@ benz_test <- read.csv("data/test.csv")
 
 ## Feature Selection
 ```{r}
+benz_train_ID <- benz_train$ID
+benz_train$ID <- NULL
+
+benz_train_y <- benz_train$y
+
+#coverting variables to factors
+benz_train[,2:ncol(benz_train)] <- lapply((benz_train %>% select(X0:X385)), as.factor)
+```
+
+Removing near zero variance variables
+```{r}
 x = nearZeroVar(benz_train, saveMetrics = TRUE)
 to_keep <- which(x$zeroVar == FALSE)
 regsub_df <- benz_train[,to_keep]
@@ -32,25 +43,194 @@ regsub_df$ID <- NULL
 regsub_df %>% ncol
 ```
 
+Converting variable to dummy variables
+```{r}
+regsub_df$y <- NULL
+dummies <- dummyVars(~., data = regsub_df)
+dummy_df <- as.data.frame(predict(dummies, regsub_df))
+names(dummy_df) %>% length
+```
+
+```{r}
+dummy_df$y <- benz_train_y
+```
+
 ### Forward Selection
 ```{r}
-forward_model = regsubsets(y ~ ., data = regsub_df, method = "forward",  nvmax = NULL)
+forward_model = regsubsets(y ~ ., data = dummy_df, method = "forward",  nvmax = NULL)
 forward_model_sum <- summary(forward_model)
 forward_model_sum$adjr2 %>% max
+
+forward_coef <- coef(forward_model, which.max(forward_model_sum$adjr2)) %>% unlist %>% names
+forward_coef <- forward_coef[-1]
+forward_coef %>% length
+```
+
+```{r}
+plot(forward_model_sum$adjr2)
+```
+
+```{r}
+forward_df <- dummy_df[,which(names(dummy_df) %in% forward_coef)]
+forward_df$y <- benz_train_y
+lm_model_forward <- lm(y~., data = forward_df)
+lm_model_forward %>% summary
+plot(lm_model_forward)
 ```
 
 ### Backward Selection
 ```{r}
-backward_model = regsubsets(y ~ ., data = regsub_df, method = "backward",  nvmax = NULL)
+backward_model = regsubsets(y ~ ., data = dummy_df, method = "backward",  nvmax = NULL)
 backward_model_sum <- summary(backward_model)
 backward_model_sum$adjr2 %>% max
+
+backward_coef <- coef(backward_model, which.max(backward_model_sum$adjr2)) %>% unlist %>% names
+backward_coef <- backward_coef[-1]
+forward_coef %>% length
 ```
 
 ```{r}
-backward_model$xnames
+plot(backward_model_sum$adjr2)
+```
+
+```{r}
+backward_df <- dummy_df[,which(names(dummy_df) %in% backward_coef)]
+backward_df$y <- benz_train_y
+lm_model_backward <- lm(y~., data = backward_df)
+lm_model_backward %>% summary
+plot(lm_model_forward)
+```
+
+
+
+### LASSO Regression
+```{r}
+glm_ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 5, verboseIter = TRUE)
+```
+
+```{r}
+LASSO_model <- train(y ~.,
+                     data = dummy_df,
+                     tuneGrid = expand.grid(alpha = 1, lambda = seq(0,1,length = 20)),
+                     method = "glmnet",
+                     trControl = glm_ctrl)
+```
+
+```{r}
+plot(LASSO_model)
+```
+
+```{r}
+LASSO_varImp <- varImp(LASSO_model)
+LASSO_varImp
+```
+
+```{r}
+coef(LASSO_model$finalModel, LASSO_model$bestTune$lambda)
+```
+
+### Ridge Regression
+```{r}
+RIDGE_model <- train(y ~.,
+                     data = dummy_df,
+                     tuneGrid = expand.grid(alpha = 0, lambda = seq(0,1,length = 20)),
+                     method = "glmnet",
+                     trControl = glm_ctrl)
+```
+
+```{r}
+RIDGE_model
+```
+
+```{r}
+plot(RIDGE_model)
 ```
 
 
 ```{r}
-glmnet_ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 5, verboseIter = TRUE)
+RIDGE_varImp <- varImp(RIDGE_model)
+RIDGE_varImp
 ```
+
+```{r}
+coef(RIDGE_model$finalModel, RIDGE_model$bestTune$lambda)
+```
+
+### Elastic Net
+```{r}
+EN_model <- train(y ~.,
+                     data = dummy_df,
+                     tuneGrid = expand.grid(alpha = seq(0, 1, length = 20), lambda = seq(0,1,length = 20)),
+                     method = "glmnet",
+                     trControl = glm_ctrl)
+```
+
+```{r}
+EN_model
+```
+
+```{r}
+plot(EN_model)
+```
+
+```{r}
+EN_varImp <- varImp(EN_model)
+EN_varImp
+```
+
+```{r}
+EN_best_index <- which(EN_model$results$alpha == EN_model$bestTune$alpha  & EN_model$results$lambda == EN_model$bestTune$lambda)
+EN_best_index
+```
+
+```{r}
+EN_model$results[EN_best_index,]
+```
+
+## Predicting
+```{r}
+benz_test_ID <- benz_test$ID
+benz_test$ID <- NULL
+```
+
+```{r}
+benz_test[,1:ncol(benz_test)] <- lapply((benz_test %>% select(X0:X385)), as.factor)
+```
+
+```{r}
+x = nearZeroVar(benz_test, saveMetrics = TRUE)
+to_keep <- which(x$zeroVar == FALSE)
+test_df <- benz_test[,to_keep]
+
+test_df %>% ncol
+```
+
+
+```{r}
+test_dummies <- dummyVars(~., test_df)
+test_dummies_df <- as.data.frame(predict(test_dummies, test_df)) 
+```
+
+
+```{r}
+not_in_test_var_index <- which(!names(dummy_df) %in% names(test_dummies_df))
+not_in_test_var_names <- names(dummy_df[,not_in_test_var_index])
+not_in_test_var_names <- not_in_test_var_names[-25]
+length(not_in_test_var_names)
+```
+
+```{r}
+new_test_dummies_df <- matrix(rep(0,ncol(test_dummies_df)*nrow(test_dummies_df)), ncol = ncol(test_dummies_df)) %>% as.data.frame
+colnames(new_test_dummies_df) <- not_in_test_var_names
+new_test_dummies_df <- cbind(new_test_dummies_df, test_dummies_df)
+```
+
+```{r}
+EN_pred <- predict(EN_model, new_test_dummies_df) %>% as.data.frame
+EN_pred$ID <- benz_test_ID
+write.csv(EN_pred, file = "062017_EN_pred.csv")
+```
+
+Kaggle: 0.54730
+
+
