@@ -1,0 +1,131 @@
+---
+title: "xgboost"
+author: "Xi Liang"
+date: "6/24/2017"
+output: html_document
+---
+
+```{r}
+library(xgboost)
+library(readr)
+library(stringr)
+library(caret)
+library(car)
+library(tidyverse)
+```
+
+
+## Data Preparation
+```{r}
+train_df <- read.csv("../data/train.csv", stringsAsFactors = FALSE) %>% tbl_df
+test_df <- read.csv("../data/test.csv", stringsAsFactors = FALSE)
+```
+
+```{r}
+xgb_df <- train_df
+train_y <- xgb_df$y
+trian_id <- xgb_df$ID
+xgb_df$y <- NULL
+xgb_df$ID <- NULL
+
+test_id <- test_df$ID
+test_df$ID <- NULL
+
+combined <- rbind(xgb_df, test_df)
+train_row <- nrow(xgb_df)
+```
+
+```{r}
+variable_names <- names(xgb_df)
+
+for (i in variable_names) {
+  if (is.character(combined[[i]])) {
+    levels = sort(unique(combined[[i]]))
+    combined[[i]] = as.integer(factor(combined[[i]],levels = levels))
+  }
+}
+```
+
+```{r}
+train_numeric_df <-  combined[1:nrow(train_df),]
+test_numeric_df <- combined[nrow(train_df) + 1:nrow(combined),]
+```
+
+```{r}
+train_numeric_df[] <- map(train_numeric_df, as.numeric)
+test_numeric_df[] <- map(test_numeric_df, as.numeric)
+```
+
+```{r}
+train_numeric_df <- xgb.DMatrix(as.matrix(train_numeric_df), label = train_y)
+test_numeric_df <- xgb.DMatrix(as.matrix(test_numeric_df))
+```
+
+
+```{r, echo=TRUE}
+r2_metric <- function(preds, train_df) {
+  labels <- getinfo(train_df, "label")
+  r2 <- 1 - (sum((labels-preds )^2)/sum((labels-mean(labels))^2))
+  list(metric = "r2", value = r2)
+}
+
+watchlist <- list(eval = test_df, train = train_df)
+```
+
+
+```{r}
+params <- list(
+  booster = "gbtree",
+  objective = "reg:linear",
+  eta = 0.005,
+  gamma = 0,
+  max_depth = 4,
+  subsample = 0.95,
+  base_score = mean(benz_train_y),
+  seed = 123
+  #eval_metric = r2_metric
+  )
+```
+
+
+
+```{r}
+xgb_model_cv <- xgb.cv(params = params,
+                data = train_numeric_df,
+                nrounds = 1000,
+                nfold = 5,
+                print_every_n = 1,
+                early_stopping_rounds = 20,
+                maximize = F,
+                prediction = F)
+```
+
+```{r}
+xgb_model_cv$best_iteration
+```
+
+
+```{r}
+xgb_model <- xgb.train(params, train_numeric_df, 
+                       nrounds = xgb_model_cv$best_iteration,
+                       verbose = 1)
+```
+
+```{r}
+xgb.importance(feature_names = colnames(benz_train), model = xgb_model) %>% head(10) %>%xgb.plot.importance()
+```
+
+```{r}
+xgb_pred <- predict(xgb_model, test_numeric_df) %>% as.data.frame()
+```
+
+```{r}
+xgb_pred$ID <- benz_test_ID
+```
+
+```{r}
+write.csv(xgb_pred, file = "062417_xgboost_pred.csv")
+```
+
+
+
