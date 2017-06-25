@@ -120,7 +120,7 @@ xgb_pred <- predict(xgb_model, test_numeric_df) %>% as.data.frame()
 ```
 
 ```{r}
-xgb_pred$ID <- benz_test_ID
+xgb_pred$ID <- test_id
 ```
 
 ```{r}
