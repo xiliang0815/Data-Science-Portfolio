@@ -1,0 +1,476 @@
+---
+title: "Instacart Market Basket Analysis EDA"
+author: "Xi Liang"
+date: "6/26/2017"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '5'
+  html_document:
+    toc: yes
+    toc_depth: 5
+    toc_float: yes
+---
+```{r, warning=FALSE}
+library(data.table) 
+library(dplyr)
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(ggplot2)
+library(treemap)
+```
+
+# Loading files
+```{r, message=FALSE}
+aisles <- fread("data/aisles.csv", stringsAsFactors = T)
+dept <- fread("data/departments.csv", stringsAsFactors = T)
+orders <- fread("data/orders.csv", stringsAsFactors = T)
+products <- fread("data/products.csv", stringsAsFactors = T)
+order_products_prior <- fread("data/order_products__prior.csv", stringsAsFactors = T)
+order_products_train <- fread("data/order_products__train.csv", stringsAsFactors = T)
+```
+
+This dataset contains total six files, we will take a look at them one by one.
+
+# Departments
+```{r}
+dept$department
+```
+
+"Dept" data contains the names for 20 different departments, mostly are department names we see in our day to day life in a grocery store. This file also contain a category, "missing", to describe items that are not associated to any departments listed above.
+
+# Aisles
+```{r}
+aisles$aisle
+```
+
+This data contains 134 observations that describe the locations of a specific product in the market.
+
+# Products
+```{r}
+products %>% glimpse()
+```
+
+"Products" contains 49688 unqiue observations (products) and each of the product is linked with specific aisle ID and department ID. Since we already have the files that contian department and aisle information, we could consolidate those information into this file to gain a better understanding the inventory of our grocery.
+
+```{r}
+products_w_desc <- products
+
+products_w_desc[, aisles_description := aisles$aisle[products$aisle_id]]
+products_w_desc[, depart_description := dept$department[products$department_id]]
+```
+
+Here is what our data frame looks like after integratin the aisle and department information:
+```{r}
+products_w_desc
+```
+
+## Products with missing information
+Let's first take a look how many products in our data that don't have aisle and department information, and we would like to know what those products are. This will be a bit similar to text mining, so let's handle it with wordcloud.
+
+```{r}
+products_missing_info <- products_w_desc[aisles_description == "missing" | depart_description == "missing"] 
+products_missing_info %>% dim
+```
+
+```{r}
+products_corpus <- VCorpus(VectorSource(products_missing_info$product_name))
+```
+
+```{r}
+#cleaning text info
+products_corpus_clean <- tm_map(products_corpus,
+                                content_transformer(tolower))
+
+#check if it worked
+products_corpus_clean[[1]] %>% as.character
+
+#remove numbers from corpus
+products_corpus_clean <- tm_map(products_corpus_clean, removeNumbers)
+
+#remove stop words (assuming if ther are any)
+products_corpus_clean <- tm_map(products_corpus_clean, removeWords, stopwords())
+
+#remove punctuation
+products_corpus_clean <- tm_map(products_corpus_clean, removePunctuation)
+
+#remove white spaces
+products_corpus_clean <- tm_map(products_corpus_clean, stripWhitespace)
+```
+
+We will visualize the most frequent appeared words (at least appeared 25 times in the data) with wordcloud.
+```{r}
+wordcloud(products_corpus_clean, min.freq = 25, random.order = F)
+```
+
+```{r}
+products_corpus_clean_dtm <- TermDocumentMatrix(products_corpus_clean)
+mat <- as.matrix(products_corpus_clean_dtm)
+v <- sort(rowSums(mat), decreasing = TRUE)
+d <- data.frame(word = names(v), freq = v)
+head(d,20)
+```
+
+```{r}
+barplot(d[1:15,]$freq, las = 2 ,names.arg = d[1:15,]$word,
+        main = "Products with Missing Information, In Decreasing Frequency",
+        ylab = "Frequency")
+```
+
+After analyzing what are the products that have highest rate of missing information, we will analyze the rest of the products in the grocery that have both of the aisle and department information. Through this analysis, we will know which departments contain the most products and what are those products.
+
+```{r}
+count_by_depart <- table(products_w_desc$depart_description) %>% 
+                   sort(decreasing = T) %>% 
+                   as.data.frame()
+
+colnames(count_by_depart) <- c("department_name","Count")
+
+count_by_depart$pct <- prop.table(count_by_depart$Count) %>% 
+                       round(3) * 100
+
+count_by_depart
+```
+
+```{r}
+par(mfrow = c(1,2))
+ggplot(count_by_depart, aes(x = "", y = Count, fill = department_name)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y",start = 0)
+
+ggplot(count_by_depart, aes(department_name, Count)) +
+  geom_bar(aes(fill = department_name), stat = "identity") +
+  labs(title = "Number of Products in Each Department") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = "none")
+```
+
+From the above result, we see department that has the most product is the personal care department (>6000 products), followling by snacks. We will make a wild assumption by assuming that the number of product that a department carries should be correlated to the sales. For now, we will move on to the next data.
+
+# Orders
+This data contains detail purchase history of customers. There are approximately 3.4 million transaction history and 206,209 customers Variables include "order_id", "user_id", "eval_set", "order_number", "order_dow", "order_hour_of_day", and "days_since_prior_order". 
+```{r}
+orders %>% dim
+unique(orders$user_id) %>% length
+str(orders)
+```
+
+Before doing anything, we want to set a few variables in the data as factors.
+```{r}
+orders$order_id <- as.factor(orders$order_id)
+orders$user_id <- as.factor(orders$user_id)
+orders$order_hour_of_day <- as.factor(orders$order_hour_of_day)
+```
+
+Among all the variables, we see a few interesting things. From the summary, we know that all the order IDs are unique; the maximum transaction history that one has is 100; "days_since_prior_order" has almost 200K records are NAs.
+
+```{r}
+summary(orders)
+```
+
+## NA values
+Let's find out what those missing values have in common.
+```{r}
+missing_index <- which(is.na(orders$days_since_prior_order))
+missing_df <- orders[missing_index,] %>% tbl_df
+missing_df %>% summary
+```
+
+As we see from the summary above, all these missing values come from order number is one. Which make sense, as there will not be transaction history of a new customer. Next, let us see the transaction quantity and its distribution.
+
+## Number of transaction made
+```{r}
+transaction_count <- orders[, .(transaction_count = .N), by = user_id]
+transaction_count %>% summary
+```
+
+We see that the minimum transaction made by specific customers in this data is 4, and the maximum is 100, with mean equals to 16.59 and median equals to 10. Following is the distribution of the transaction count frequency:
+
+```{r}
+ggplot(transaction_count, aes(transaction_count)) +
+  geom_histogram(binwidth = 5) +
+  labs(title = "Distribution of Repurhcase Count") +
+  xlab("Repurhcase Count") +
+  ylab("Frequency") +
+  theme(axis.text.x = element_text(hjust = 1),
+        plot.title = element_text(hjust = 0.5))
+```
+
+A large portion of customer made less than 25 transactiosn, and that number continue to descrease as the transaction count increases. The population of customers that made 4 to 5 purchases from the store is the largest.
+
+```{r}
+transaction_count[transaction_count == 100] %>% nrow
+```
+
+We have 1374 customers that made 100 transactions. It will be interesting to see what kind of products they bought and try to learn thier purhcasing behaviors.
+
+## Order day of week and hour of the day
+Our data also includes what day of the week and what time of the day that a specific transaction happened. Let's take a look how these number fluctuate throughout the week.
+```{r}
+dow <- orders[, .N, by = order_dow][order(order_dow)]
+plot(dow, type = "l",
+     main = "Order Count Based on Day of Week",
+     xlab = "Day of the Week",
+     ylab = "Count")
+```
+
+From the plot above, we can see that day 0 and day 1 of the week are the peak days where the customers made most of their purchases, and the count decreases as the week develops, and eventually bounce back on day 5.
+
+## Order Hour of the Day
+```{r}
+hod <- orders[, .N, by = order_hour_of_day][order(order_hour_of_day)]
+ggplot(hod, aes(x= order_hour_of_day, y= N, group = 1)) +
+  geom_point() +
+  geom_line() +
+  xlab("Hour of Day") +
+  ylab("Count") +
+  ggtitle("Order Count Based on Hour of Day") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+The peak hours are from 10AM to 4PM everyday. Since we don't have the locations where the customers are, so we wouldn't know if there is a difference in peak hours across the naiton.
+
+## Combining Day of Week and Hour of the Day
+```{r}
+order_dow_hod <- orders[, .N, by = .(order_dow, order_hour_of_day)]
+```
+
+```{r}
+ggplot(order_dow_hod, aes(as.numeric(order_hour_of_day), N, color = factor(order_dow))) +
+  geom_line() +
+  labs(title = "Transaction Count Throughout the Day, Colored by Day of the Week") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  xlab("Hour of Day")+
+  ylab("Count")
+```
+
+Combining all days in one week, we can see how they are different and similar to each other. As we can see, the pattern from 1AM to 7AM are pretty similar no matter which day it is throughout the week. After 7AM, both day 0 and day 1 start to pick up speed and eventually reach approximately 600K transactions at 3PM (day 0) and 11AM (day 1). We can also see that day 0 and day 5 have similar pattern at peak hours, despite the vast difference in transaction counts, once the transaction quantity go up after 7AM, they don't drop down until it reach the daily maximum. Comparing to the other days (all days beside day 1), we see these bumps created by decline in sales volume after 11AM, and start to bounce back up after 1PM, and eveutally died down around 5PM.
+
+## Combining "Days_since_prior_order" and Transaction Made
+
+Since we can get the number of transaction of a specific customer made based on the number of occurance of a specific "user_id", and because that variable "days_since_prior_order" indicates the purhcase frequnecy of a customer, it will be interesting to look at the relationship between these two varaibles.
+```{r}
+count_freq <- transaction_count[order(user_id)]
+
+freq_df <- orders[, .(freq = median(days_since_prior_order, na.rm = T)), by = user_id]
+
+count_freq$freq <- freq_df$freq
+```
+
+```{r}
+ggplot(count_freq, aes(transaction_count, freq)) +
+  geom_smooth() +
+  labs(title= "Correlation Between Transaction Count and Median of Days Since Prior Order") +
+  xlab("Transaction Count") +
+  ylab("Median of Days Since Prior Order")
+```
+
+We clearly see that customers who have more transactions tend to shop more.
+
+## Distribution of Days Since Prior Order
+```{r}
+ggplot(orders, aes(days_since_prior_order, fill = order_hour_of_day)) +
+  geom_histogram(binwidth = 2) +
+  labs(title = "Distribution of Days Since Prior Order, Colored by Order Hour of Day") +
+  xlab("Days Since Prior Order") +
+  ylab("Frquency") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+#transaction made monthly apart
+prop.table(table(orders$days_since_prior_order == 30))
+
+#transaction made within interval 0 days to 10 days
+prop.table(table(orders$days_since_prior_order >0 & orders$days_since_prior_order <= 10))
+```
+
+From the plot above, we see a bimodal distribution. We can see that there are around 380K (11.48%) transactions made 30 days (one month) after the prior transaction. Around 63% of the customers make purhcase ranging from 0 day to 10 days (around 2% of customer make repurhcase on the same day).
+
+## When customers come back, do they make purhcase around the same time (day/hour) ?
+
+We also wonder when customers come back to make another purhcase, is there a consistent trend? For example, a customer made purhcase this Monday at 10AM, will this time frame be somewhat similar the next time this customer come back to make a purhcase again ? We will find out in this section.
+
+We will use standard deviation as a metric to gauge the consistency of specific customer.
+```{r}
+#Calculate standard deviation to both of the "order_dow" and "order_hour_of_day", based on user_id, passed result to "order_patterns".
+order_patterns <- orders %>% select(user_id, order_dow, order_hour_of_day) %>%
+                  group_by(user_id) %>%
+                  summarise(dow_sd = sd(order_dow), order_hour_of_day_sd = sd(as.numeric(order_hour_of_day)))
+```
+
+```{r}
+boxplot(order_patterns$dow_sd)
+```
+
+```{r}
+quantile(order_patterns$dow_sd)
+```
+
+50% of the customer make purhcase 1.58 to 2.27 standard deviation of their day of the week means. We have two hypotheses to explain this phenomenon:
+
+1. Only a small percentage of customer make purhcase on a specific day of the week, most customers would just make purhcase whenever they need, and products they purchase are different every time (reordering is low).
+
+2. Only a small percentage of customer subscribe to a certain type of products and schduled delivery for certain interval of time, most customers make purhcase when products they often buy are exhausted, however, because most people would wait a day or two before placing new orders, which expalins the standard deviation.
+
+We will try to address this observation in later section, when we combine the product information and the order history into one data frame.
+
+```{r}
+boxplot(order_patterns$order_hour_of_day_sd)
+```
+
+```{r}
+quantile(order_patterns$order_hour_of_day_sd)
+```
+
+Comparing to the day of the week standard devations, the standard deviation for hour of the day is higher, 50% of the customers make purhcase between 2.63 to 4.44 standard devations of their means in hour of the day. This huge standard devation make sense since we don't expect customers would keep track when they place order last time, and try to place the next order around the same time.
+
+# Orders_products (prior and train)
+There are different data files containing the order history in every trasaction, file "order_products_prior" and file "order_products_train". These two files contain variable "order_id", "product_id", "add_to_cart_order", and a binary variable "reordered", with 1 indicates yes and 0 indicates no. In order to get a full grasp of all the transactions, we will combine these two data at the moment.
+
+```{r}
+#combining of the prior and train files
+combined <- rbind(order_products_prior, order_products_train)
+dim(combined)
+```
+
+```{r}
+str(combined)
+```
+
+We will then use the product ID to get the product names, and store them under variable "product".
+```{r}
+combined$product <- products$product_name[combined$product_id]
+combined
+```
+
+## Most popular products
+
+We will then sort the the product and see which products are the most popular.
+```{r}
+product_count <- data.frame(product_name = table(combined$product) %>% sort(decreasing = T) %>%
+                              names,
+                            count = table(combined$product) %>% sort(decreasing = T) %>% unlist
+                            %>% as.numeric())
+```
+
+Here are the ten most popular products in the grocery:
+```{r}
+product_count %>% head(10)
+```
+
+People really love vegetables, fruits, and organic products.
+
+## First product add to the cart
+
+Using the variable "add_to_cart_order", we can find out which items usually get to added to the cart first.
+```{r}
+combined[add_to_cart_order == 1, .N, by = product][order(-N)] %>% head(10)
+```
+
+We can see that bananas are still the winner.
+
+## Which products get reordered most
+```{r}
+combined %>% 
+  select(product, reordered) %>% 
+  group_by(product) %>% 
+  summarise(reorder_sum = sum(reordered)) %>% 
+  arrange(desc(reorder_sum)) %>%
+  head(10)
+```
+
+This top 10 list is pretty similar to the most popular products, which make sense, given the fact that nearly 60% of the products are from reordered transactions.
+
+# In-depth Analysis
+
+## Combining everything
+
+From this point forward, we will try to combined all the information we have at this point and try to gain a deeper insight of the transaction history.
+```{r}
+combined$order_id <- as.factor(combined$order_id)
+```
+
+```{r}
+order_hist_detail <- merge(combined, orders, by = "order_id", all.x = TRUE)
+#remove repeated variable
+order_hist_detail$product <- NULL
+
+order_hist_detail %>% head(10)
+```
+
+Combining transaction history with product information. Since we have almost fifty thousand products, adding the aisle and department information can help use to narrow down customer's preferences.
+```{r}
+order_hist_detail <- merge(order_hist_detail, products_w_desc, by = "product_id")[order(order_id)]
+order_hist_detail %>% head(10)
+```
+
+### Most popular products in each department
+There are twenty departments total (excluding "missing" department), we wonder what are the most popular (top three) products in each department, and how do their transaction count fluctuate as a day progress.
+
+```{r}
+top_3_each_dept = list()
+for (i in 1:(nrow(dept)-1)) {
+  tmp_df <- order_hist_detail[depart_description == dept$department[i]] %>%
+    select(aisles_description) %>%
+    group_by(aisles_description) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count))
+  
+  top_3_each_dept[[i]] = tmp_df$aisles_description[1:3]
+}
+```
+
+
+```{r}
+tmp = top_3_each_dept %>% unlist
+tmp = tmp[!is.na(tmp)]
+tmp
+```
+
+```{r}
+index <- which(order_hist_detail$aisles_description %in% tmp) %>% unlist %>% as.numeric()
+tmp2 <- order_hist_detail[index,]
+
+hourly_total = tmp2[, .(hourly_total = .N), by = order_hour_of_day]
+
+tmp3 <- tmp2[, .N, by = .(aisles_description, depart_description, order_hour_of_day)]
+tmp3 <- merge(tmp3, hourly_total, by = "order_hour_of_day")
+tmp3 <- tmp3 %>% mutate(pct = N/hourly_total*100)
+
+tmp3$order_hour_of_day <- as.numeric(tmp3$order_hour_of_day)
+``` 
+
+```{r}
+ggplot(tmp3, aes(order_hour_of_day, pct, group = interaction(aisles_description, depart_description))) + 
+  geom_area(color = "black", aes(fill = depart_description))
+```
+
+From the plot above we can see how the percentage of sales in different aisels move as the day progress. Generally speaking, we don't see the percentage of sales shift too much. In addtion, we also see that aisles produce, snacks take up approximately 50% of the sales, among all the sales of top 3 products in each department.
+
+```{r}
+tmp <- products_w_desc
+depart_size <- tmp[, .(depart_size = .N), by = depart_description]
+depart_aisles_size <- tmp[, .(aisles_size = .N), by = .(aisles_description, depart_description)]
+
+depart_aisles_size <- merge(depart_aisles_size, depart_size, by ="depart_description", all.x = TRUE)
+
+item_sales_count <- order_hist_detail[, .(item_sale_count = .N), by = aisles_description]
+
+treemap_df <- merge(depart_aisles_size, item_sales_count, by = "aisles_description")
+```
+
+
+```{r}
+treemap(treemap_df,
+        index = c("depart_description", "aisles_description"),
+        vSize = "aisles_size",
+        vColor = "item_sale_count",
+        type = "value",
+        title = "Aisle and Product Treemap, Sized by Aisle Size, Colored by Sale Count",
+        title.legend = "Sales Count")
+```
+
+Earlier we've made an assumption that because "personal care" and "snacks" are the department carry most prodcuts in the grocery store, they should have the highest sale, however, we were wrong. From the treemap, we see that department that sold most products were the produce department (thanks to those bananas).
