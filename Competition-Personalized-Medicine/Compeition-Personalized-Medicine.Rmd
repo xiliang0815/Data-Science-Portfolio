@@ -1,0 +1,1000 @@
+---
+title: "Kaggle Competition - Personalized Medicine: Redefining Cancer Treatment"
+author: "Xi Liang"
+date: "8/5/2017"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 5
+---
+```{r, message=FALSE, warning=FALSE}
+############ EDA ################
+library(data.table) #reading data
+library(tibble) #reading data
+library(readr) #reading data
+library(tidyr) #data manipulation
+library(dplyr) #data manipulatiion
+library(ggplot2) #data visualization
+library(treemap) #data visualization
+library(stringr) #string manipulation
+library(tm) #text mining
+library(SnowballC) #text mining
+library(wordcloud) #data visualization for text mining
+library(tidytext) #string manipulation
+library(magrittr) #string manipulation
+library(syuzhet) #text mining -sentiment analysis
+
+########### Modeling #############
+library(ngram) #text mining - ngram analysis
+library(Matrix) #creating matrix for xgboost
+library(xgboost) #xgboost modleing
+library(caret) #confusion matrix
+```
+
+# Objective
+
+The main objective of this project is to develop a machine learning model in order to help clinical pathologists to narrow down the target genetic mutations when come to analysis on an oncology sequencing report.
+
+There are a few **disadvantages** from the current workflow of how a clinical pathologist interpret the genetic mutations from a sequencing report:
+
+1. Time consuming
+2. Personal experience dictates the interpretations
+3. Patients could missing the most optimal timeline for treatments
+
+With the help of the current technologies in data science, text mining, and NLP, it is possible to develop a tool to help the process of sequencing report interpretation more **efficient** and **accurate**.
+
+The data I will be using in this porject was published on Kaggle, the data was submitted by Memorial Sloan Kettering Cancer Center, a renowned cancer research institute in the United States. This data contains already-annotated genetic mutations by world-class researchers and oncologists.
+
+Here is the general workflow of this project:
+```{r, out.width='100%', echo = FALSE}
+knitr::include_graphics('project_workflow.png')
+```
+
+
+
+# Loading Data
+```{r}
+train <- fread("data/training_variants.csv")
+test <- fread("data/test_variants.csv")
+
+train_text <- tibble(text = read_lines("data/training_text.csv", skip = 1)) %>%
+  separate(text, into = c("ID", "txt"), sep = "\\|\\|")
+
+test_text <- tibble(text = read_lines("data/test_text.csv", skip = 1)) %>%
+  separate(text, into = c("ID", "txt"), sep = "\\|\\|")
+
+#this data contains new variables created for modeling and already cleaned text
+#for both of the training and testing data
+combined_data <- fread("modeling_df.csv")
+#combined_data[,1] <- NULL
+
+train_df <- combined_data[1:nrow(train),]
+
+test_df <- combined_data[3322:8989, ]
+test_df$Class <- NULL
+```
+
+```{r}
+#fixing data types
+train$ID <- as.numeric(train$ID)
+train$Gene <- as.factor(train$Gene)
+train$Variation <- as.factor(train$Variation)
+train$Class <- as.factor(train$Class)
+
+test$ID <- as.numeric(test$ID)
+test$Variation <- as.factor(test$Variation)
+test$Gene <- as.factor(test$Gene)
+
+train_text$ID <- as.numeric(train_text$ID)
+test_text$ID <- as.numeric(test_text$ID)
+```
+
+There are 4 variables in the training set and 3 variables in the testing set. These varaibles are
+
+1. **ID**: The id of the row used to link the clinical evidence to the genetic mutation)
+2. **Gene**: The gene where this genetic mutation is located
+3. **Variation**: The aminoacid change for this mutations
+4. **Class**: 1-9 the class this genetic mutation has been classified on
+
+# EDA
+```{r}
+summary(train)
+summary(test)
+```
+
+```{r}
+#proportion of training data to the whole data set
+nrow(train) / (nrow(test) + nrow(train))
+```
+
+## Distribution of Cacner Class
+```{r, echo=FALSE}
+ggplot(train, aes(Class)) +
+  geom_bar(aes(y = (..count..)/sum(..count..), fill = Class)) +
+  ggtitle("Class of Genetic Mutation Distribution") +
+  geom_text(aes(y = ((..count..)/sum(..count..)), label = scales::percent((..count..)/sum(..count..))), 
+            stat = "count", vjust = -0.25) +
+  ylab("Class Percentage") + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        legend.position = "none")
+```
+
+From the class distribution above, we can see that the distribution itself pose some **challenges**. Class 3, 8 and 9 together only take up less than 5% of the overall classes, this low percentage implies that classification with these 3 classes would be more difficult than the others.
+
+## Top Genetic Mutations
+```{r}
+#get the top 20 genetic mutation from the train file
+train_gene_count <- train %>%
+  group_by(Gene) %>%
+  summarise(train_gene_count = n()) %>%
+  arrange(desc(train_gene_count))
+
+train_gene_count_top <- train_gene_count[1:20,]
+```
+
+```{r}
+#get the top 20 genetic mutation from the test file
+test_gene_count <- test %>%
+  group_by(Gene) %>%
+  summarise(test_gene_count = n()) %>%
+  arrange(desc(test_gene_count))
+
+test_gene_count_top <- test_gene_count[1:20,]
+```
+
+```{r, echo=FALSE}
+ggplot(train_gene_count_top, aes(x = reorder(Gene, -train_gene_count), y =  train_gene_count, group = 1)) +
+  geom_line() +
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous() +
+  ggtitle("Top 20 Gene Type from the Train Data") +
+  ylab("Count") +
+  xlab("Genetic Mutations")
+```
+
+```{r, echo=FALSE}
+ggplot(test_gene_count_top, aes(x = reorder(Gene, -test_gene_count), y =  test_gene_count, group = 1)) +
+  geom_point() +
+  geom_line() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Top 20 Gene Type from the Test Data") +
+  ylab("Count") +
+  xlab("Genetic Mutations")
+```
+
+According to plots above, we don't see a much of overlapping in mutations from the testing and training data. So how many genes that from the training set also appeared in the testing set?
+```{r}
+unique(train$Gene) %>% length
+which(unique(train$Gene) %in% unique(test$Gene)) %>% length
+```
+
+There are 264 unique gene types in the training data, and 154 of them appeared in the testing data.
+
+## Top 20 Genes and Their Corresponding Classes
+```{r}
+tmp <- inner_join(train_gene_count_top,train[,c(2,4)])
+
+class_count <- tmp %>%
+  group_by(Class) %>% summarise(class_count = n())
+
+tmp2<- tmp %>%
+  group_by(Gene, Class) %>%
+  summarise(count = n())
+
+tmp2 <- inner_join(tmp2, class_count)
+tmp2 <- tmp2 %>% mutate(pct = count/class_count)
+
+#group by class
+ggplot(tmp2, aes(Gene, pct)) +
+  geom_point() +
+  facet_wrap(~ Class) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text.x = element_text(size = 10),
+        axis.text = element_text(size = 6))
+```
+
+```{r}
+train_dist <- train %>% 
+  filter(Gene %in% train_gene_count_top$Gene)
+
+treegraph(train_dist, show.labels = T, index = c("Class", "Gene"), vertex.layout = "auto")
+```
+
+## Genetic Mutations Defining Classes?
+So how do researchers classsify different types of cancer? Is there a correlation between the genentic mutation types and the cancer types? We will try to figure that out below by building a treemap based on frequency of different genetic mutations in different classes, the one with bigger rectangle means it has higher occurance in specific cancer type.
+```{r}
+class_gen_mut <- train %>% 
+  group_by(Gene, Class) %>%
+  summarise(count = n())
+```
+
+```{r}
+treemap(class_gen_mut,
+        index = c("Class","Gene"),
+        vSize = "count",
+        vColor = "count",
+        type = "value",
+        title = "Genetic Mutation Treemap Based on Class, Sized and Colored by Frequency",
+        title.legend = "Frequency",
+        fontsize.title = 15,
+        fontsize.labels = 10,
+        fontsize.legend = 13)
+```
+
+From the treemap above, we see that Class 1, 4, 5, 6, and 7 have their "representative" genetic mutations. Class 1's main genetic mutation is **"TP53"**, Class 4's main genetic mutation was **"PTEN"**, Class 5's main genetic mutation was **"BRCA1"**, Class 6's main genetic mutation was **"BRCA2"**, and Class 7's genetic mutation was **"EGFR"**. While this looks promising, but we have to keep in mind that this observation is only valid in the trainning data, since we have seen that out of 1397 unique mutations in the testing data set, only 154 of those appeared in the training data.
+
+
+## Class and Variation
+Next we would like to see if the "variation" feature has anything to do with identification of the cancer type.
+```{r}
+variation_count_train <- train %>% 
+  group_by(Variation) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+variation_count_train
+```
+
+```{r}
+variation_top5_train <- variation_count_train[c(1:5),]
+variation_top5_train$eval_set <- "train"
+variation_top5_train
+```
+
+```{r}
+class_variation_top5_train <- train[which(train$Variation %in% variation_top5_train$Variation),]
+```
+
+```{r}
+ggplot(class_variation_top5_train, aes(Variation, fill = Class)) +
+  geom_bar(position = "stack")
+```
+
+Out of the top five variations in the train data, we can see that a big portion of "Truncating Mutations" and "Deletion" came from Class 1, and Class 2 was mainly contributed by "Amplification" and "Fusions", while the majority of the "Amplification" variation came from Class 7 , and part of "Deletion" was from Calss 4.
+
+## Comparing variations between the train and test file
+```{r}
+variation_count_test <- test %>%
+  group_by(Variation) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+variation_top5_test <- variation_count_test[c(1:5),]
+variation_top5_test$eval_set <- "test"
+```
+
+```{r}
+variation_train_test <- rbind(variation_top5_train, variation_top5_test)
+variation_train_test
+```
+
+```{r}
+ggplot(variation_train_test, aes(Variation, count)) +
+  geom_point(aes(color = eval_set, shape = eval_set), size = 5) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# Text Analysis
+## String Lengths
+```{r}
+train_combined <- inner_join(train, train_text)
+train_combined$txt_count <- nchar(train_combined$txt)
+ggplot(train_combined, aes(Class, txt_count)) +
+  geom_violin(aes(fill = Class)) +
+  ylab("character count") +
+  ggtitle("Character Count Based on Classes")
+```
+
+## Word Length
+```{r}
+train_combined$word_count <- str_count(train_combined$txt, "\\S+")
+ggplot(train_combined, aes(Class, word_count)) +
+  geom_violin(aes(fill = Class)) +
+  ylab("word count") +
+  ggtitle("Word Count Based on Classes")
+```
+
+## Character Length and Mutations
+```{r}
+#top_20 gene mutation and how their character count in the text
+gene_chr_df <- train_combined %>%
+  group_by(Gene) %>%
+  summarise(gene_chr = median(nchar(txt))) %>%
+  arrange(desc(gene_chr))
+
+top_gene_chr_count_train <- inner_join(gene_chr_df, train_gene_count_top)
+ggplot(top_gene_chr_count_train, aes(Gene, gene_chr)) +
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+variation_chr_df <- train_combined %>%
+  group_by(Variation) %>%
+  summarise(variation_chr = median(nchar(txt))) %>%
+  arrange(desc(variation_chr))
+
+top_variation_chr_count_train <- inner_join(variation_chr_df, variation_top5_train)
+ggplot(top_variation_chr_count_train, aes(Variation, variation_chr)) +
+  geom_point()
+```
+
+## Text Cleaning
+
+```{r}
+train_corpus <- VCorpus(VectorSource(train_df$txt))
+test_corpus <- VCorpus(VectorSource(test_df$txt))
+```
+
+```{r, eval=FALSE}
+clean_corpus <- function(corpus){
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, stripWhitespace)
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, removeWords, stopwords("en"))
+  corpus <- tm_map(corpus, stemDocument)
+  return(corpus)
+}
+```
+
+```{r, eval=FALSE}
+#this is going to take some time
+combined_corpus <- clean_corpus(combined_corpus)
+```
+
+```{r, eval = FALSE}
+words_to_remove <- c("use", "patient", "fig", "figur", "gene", "studi", "also", "data", "tabl", "may", "dna", "report", "shown", "one", "mutat", "mutant","cell", "activ", "et", "al", "cancer", "express", "tumor",
+"al.,", "(figure", "null")
+```
+
+```{r, eval =FALSE}
+train_corpus <- tm_map(train_corpus, removeWords, c(stopwords("english"), words_to_remove))
+test_corpus <- tm_map(test_corpus, removeWords, c(stopwords("english"), words_to_remove))
+```
+
+```{r, eval = FALSE, echo = FALSE}
+train_corpus <- tm_map(train_corpus, removePunctuation)
+test_corpus <- tm_map(test_corpus, removePunctuation)
+
+train_corpus <- tm_map(train_corpus, removeNumbers)
+test_corpus <- tm_map(test_corpus, removeNumbers)
+```
+
+```{r, eval = FALSE, echo = FALSE}
+#save the corpus in df to avoid future long run time
+train_clean_txt <-  data.frame(text=unlist(sapply(train_corpus, `[`, "content")), 
+                               stringsAsFactors= F)
+test_clean_txt <- data.frame(text = unlist(sapply(test_corpus, `[`, "content")),
+                             stringsAsFactors = F)
+
+write.csv(train_clean_txt, "train_clean_txt.csv")
+write.csv(test_clean_txt, "test_clean_txt.csv")
+```
+
+```{r, eval = FALSE}
+train_df$txt <- train_clean_txt
+test_df$txt <- test_clean_txt
+test_df$Class <- -1
+
+combined_data <- rbind(train_df, test_df)
+write.csv(combined_data, "modeling_df.csv")
+```
+
+## Word Count
+```{r}
+train_txt <- fread("train_clean_txt.csv", stringsAsFactors = F)
+train_df$txt <- train_txt$text
+train_df$Class <- train$Class
+word <- train_df[,c("Class", "txt")] %>% 
+  unnest_tokens(word,txt) %>% 
+  count(Class, word, sort = T) %>% ungroup()
+
+total_word <- word %>%
+  group_by(Class) %>%
+  summarize(total = sum(n))
+
+word <- left_join(word, total_word)
+```
+
+```{r}
+word$Class <- as.factor(word$Class)
+ggplot(word, aes(n/total, fill = Class)) +
+  geom_histogram(show.legend = FALSE, bins = 60) +
+  xlim(NA, 0.00025) +
+  facet_wrap(~Class, ncol = 2, scales = "free_y")
+```
+
+## tf-idf
+```{r}
+word_tf_idf_train <- as.tbl(word) %>% 
+  bind_tf_idf(word, Class, n)
+
+
+train_corpus_clean <- VCorpus(VectorSource(train_txt$text))
+train_corpus_clean_dtm <- TermDocumentMatrix(train_corpus_clean, control = list(weighting = weightTfIdf))
+train_corpus_clean_dtm <- removeSparseTerms(train_corpus_clean_dtm, sparse = 0.95)
+
+train_clean_mat <- as.matrix(train_corpus_clean_dtm)
+train_clean_v <- sort(rowSums(train_clean_mat), decreasing = T)
+train_clean_d <- data.frame(word = names(train_clean_v), freq = train_clean_v)
+
+barplot(train_clean_d[1:15,]$freq, las = 2, names.arg = train_clean_d[1:15,]$word,
+        main = "")
+```
+
+```{r}
+wordcloud(train_clean_d$word, train_clean_d$freq,min.freq = 3, random.order = F, colors = brewer.pal(6, "Dark2"))
+```
+
+```{r}
+word_tfidf <- word %>%
+  bind_tf_idf(word, Class, n)
+
+word_tfidf <- word_tfidf %>%
+  select(-total) %>%
+  filter(!tf_idf == 0) %>% #remove tf-idf = 0
+  arrange(desc(tf_idf))
+```
+
+```{r, echo = FALSE}
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, font = 2, cex = 1.5, "Class 1 Keywords Based on Inverse Document Frequency")
+class1_tfidf <- word_tfidf %>% filter(Class == 1)
+wordcloud(class1_tfidf$word, class1_tfidf$tf_idf, min.freq = 0.0002, random.order = F, colors = brewer.pal(6, "Dark2"))
+
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, font = 2, cex = 1.5, "Class 2 Keywords Based on Inverse Document Frequency")
+class2_tfidf <- word_tfidf %>% filter(Class == 2)
+wordcloud(class2_tfidf$word, class2_tfidf$tf_idf, min.freq = 0.0002, random.order = F, colors = brewer.pal(6, "Dark2"))
+
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, font = 2, cex = 1.5, "Class 3 Keywords Based on Inverse Document Frequency")
+class3_tfidf <- word_tfidf %>% filter(Class == 3)
+wordcloud(class3_tfidf$word, class3_tfidf$tf_idf, min.freq = 0.0002, random.order = F, colors = brewer.pal(6, "Dark2"))
+
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, font = 2, cex = 1.5, "Class 4 Keywords Based on Inverse Document Frequency")
+class4_tfidf <- word_tfidf %>% filter(Class == 4)
+wordcloud(class4_tfidf$word, class4_tfidf$tf_idf, min.freq = 0.0002, random.order = F, colors = brewer.pal(6, "Dark2"))
+
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, font = 2, cex = 1.5, "Class 5 Keywords Based on Inverse Document Frequency")
+class5_tfidf <- word_tfidf %>% filter(Class == 5)
+wordcloud(class5_tfidf$word, class5_tfidf$tf_idf, min.freq = 0.0002, random.order = F, colors = brewer.pal(6, "Dark2"))
+
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, font = 2, cex = 1.5, "Class 6 Keywords Based on Inverse Document Frequency")
+class6_tfidf <- word_tfidf %>% filter(Class == 6)
+wordcloud(class6_tfidf$word, class6_tfidf$tf_idf, min.freq = 0.0002, random.order = F, colors = brewer.pal(6, "Dark2"))
+
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, font = 2, cex = 1.5, "Class 7 Keywords Based on Inverse Document Frequency")
+class7_tfidf <- word_tfidf %>% filter(Class == 7)
+wordcloud(class7_tfidf$word, class7_tfidf$tf_idf, min.freq = 0.00015, random.order = F, colors = brewer.pal(6, "Dark2"))
+
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, font = 2, cex = 1.5, "Class 8 Keywords Based on Inverse Document Frequency")
+class8_tfidf <- word_tfidf %>% filter(Class == 8)
+wordcloud(class8_tfidf$word, class8_tfidf$tf_idf, min.freq = 0.0005, random.order = F, colors = brewer.pal(6, "Dark2"))
+
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, font = 2, cex = 1.5, "Class 9 Keywords Based on Inverse Document Frequency")
+class9_tfidf <- word_tfidf %>% filter(Class == 9)
+wordcloud(class9_tfidf$word, class9_tfidf$tf_idf, min.freq = 0.0007, random.order = F, colors = brewer.pal(6, "Dark2"))
+```
+
+## ngrams
+```{r, echo=FALSE, eval=FALSE}
+class1_index <- which(train_df$Class == 1)
+class1_txt <- train_df$txt[class1_index]
+class1_1word_index <-which(str_count(class1_txt, "\\S+") == 1)
+class1_txt <- class1_txt[-class1_1word_index]
+ng <- ngram (class1_txt , n =3)
+class1_trigram <- get.phrasetable(ng)
+
+#filter out those freq < 50
+class1_trigram <- class1_trigram %>%
+  filter(freq > 200)
+class1_trigram$in_txt_pct <- rep(0,nrow(class1_trigram))
+
+for (i in (1:nrow(class1_trigram))) {
+  in_txt <- grepl(class1_trigram$ngrams[i], class1_txt) %>% table %>% prop.table %>% as.numeric
+  class1_trigram$in_txt_pct[i] <- in_txt[2]
+}
+
+
+class1_trigram <- class1_trigram %>% arrange(desc(in_txt_pct))
+```
+
+```{r, echo=FALSE, eval=FALSE}
+class2_index <- which(train_df$Class == 2)
+class2_txt <- train_df$txt[class2_index]
+#class2_1word_index <-which(str_count(class2_txt, "\\S+") == 1)
+#class2_txt <- class2_txt[-class2_1word_index]
+ng <- ngram (class2_txt , n =3)
+class2_trigram <-get.phrasetable(ng)
+
+
+class2_trigram <- class2_trigram %>%
+  filter(freq > 50)
+class2_trigram$in_txt_pct <- rep(0,nrow(class2_trigram))
+
+for (i in (1:nrow(class2_trigram))) {
+  in_txt <- grepl(class2_trigram$ngrams[i], class2_txt) %>% table %>% prop.table %>% as.numeric
+  class2_trigram$in_txt_pct[i] <- in_txt[2]
+}
+
+class2_trigram <- class2_trigram %>% arrange(desc(in_txt_pct))
+```
+
+```{r, echo=FALSE, eval=FALSE}
+class3_index <- which(train_df$Class == 3)
+class3_txt <- train_df$txt[class3_index]
+#class3_1word_index <-which(str_count(class3_txt, "\\S+") == 1)
+#class2_txt <- class2_txt[-class2_1word_index]
+ng <- ngram (class3_txt , n =3)
+class3_trigram <-get.phrasetable(ng)
+
+
+class3_trigram <- class3_trigram %>%
+     filter(freq > 18)
+class3_trigram$in_txt_pct <- rep(0,nrow(class3_trigram))
+
+for (i in (1:nrow(class3_trigram))) {
+  in_txt <- grepl(class3_trigram$ngrams[i], class3_txt) %>% table %>% prop.table %>% as.numeric
+  class3_trigram$in_txt_pct[i] <- in_txt[2]
+}
+
+class3_trigram <- class3_trigram %>% arrange(desc(in_txt_pct))
+```
+
+```{r, echo=FALSE, eval=FALSE}
+class4_index <- which(train_df$Class == 4)
+class4_txt <- train_df$txt[class4_index]
+#class3_1word_index <-which(str_count(class3_txt, "\\S+") == 1)
+#class2_txt <- class2_txt[-class2_1word_index]
+ng <- ngram (class4_txt , n =3)
+class4_trigram <-get.phrasetable(ng)
+
+
+class4_trigram <- class4_trigram %>%
+     filter(freq > 120)
+class4_trigram$in_txt_pct <- rep(0,nrow(class4_trigram))
+
+for (i in (1:nrow(class4_trigram))) {
+  in_txt <- grepl(class4_trigram$ngrams[i], class4_txt) %>% table %>% prop.table %>% as.numeric
+  class4_trigram$in_txt_pct[i] <- in_txt[2]
+}
+
+#class4_trigram %>% arrange(desc(in_txt_pct)) %>% head
+
+#tmp_ind <- which(!class4_trigram$ngrams %in% c(class3_trigram$ngrams, class2_trigram$ngrams, class1_trigram$ngrams))
+
+class4_trigram <- class4_trigram %>% arrange(desc(in_txt_pct))
+```
+
+```{r, echo=FALSE, eval=FALSE}
+class5_index <- which(train_df$Class == 5)
+class5_txt <- train_df$txt[class5_index]
+#class3_1word_index <-which(str_count(class3_txt, "\\S+") == 1)
+#class2_txt <- class2_txt[-class2_1word_index]
+ng <- ngram (class5_txt , n =3)
+class5_trigram <-get.phrasetable(ng)
+
+
+class5_trigram <- class5_trigram %>%
+     filter(freq > 50)
+class5_trigram$in_txt_pct <- rep(0,nrow(class5_trigram))
+
+for (i in (1:nrow(class5_trigram))) {
+  in_txt <- grepl(class5_trigram$ngrams[i], class5_txt) %>% table %>% prop.table %>% as.numeric
+  class5_trigram$in_txt_pct[i] <- in_txt[2]
+}
+
+class5_trigram <- class5_trigram %>% arrange(desc(in_txt_pct))
+```
+
+```{r, echo=FALSE, eval=FALSE}
+class6_index <- which(train_df$Class == 6)
+class6_txt <- train_df$txt[class6_index]
+class6_1word_index <-which(str_count(class6_txt, "\\S+") == 1)
+class6_txt <- class6_txt[-class6_1word_index]
+ng <- ngram (class6_txt , n =3)
+class6_trigram <-get.phrasetable(ng)
+
+
+class6_trigram <- class6_trigram %>%
+     filter(freq > 50)
+class6_trigram$in_txt_pct <- rep(0,nrow(class6_trigram))
+
+for (i in (1:nrow(class6_trigram))) {
+  in_txt <- grepl(class6_trigram$ngrams[i], class6_txt) %>% table %>% prop.table %>% as.numeric
+  class6_trigram$in_txt_pct[i] <- in_txt[2]
+}
+
+class6_trigram <- class6_trigram %>% arrange(desc(in_txt_pct))
+```
+
+```{r, echo=FALSE, eval=FALSE}
+class7_index <- which(train_df$Class == 7)
+class7_txt <- train_df$txt[class7_index]
+class7_1word_index <-which(str_count(class7_txt, "\\S+") == 1)
+class7_txt <- class7_txt[-class7_1word_index]
+ng <- ngram (class7_txt , n =3)
+class7_trigram <-get.phrasetable(ng)
+
+
+class7_trigram <- class7_trigram %>%
+     filter(freq > 160)
+class7_trigram$in_txt_pct <- rep(0,nrow(class7_trigram))
+
+for (i in (1:nrow(class7_trigram))) {
+  in_txt <- grepl(class7_trigram$ngrams[i], class7_txt) %>% table %>% prop.table %>% as.numeric
+  class7_trigram$in_txt_pct[i] <- in_txt[2]
+}
+
+class7_trigram <- class7_trigram %>% arrange(desc(in_txt_pct))
+```
+
+
+```{r, echo=FALSE, eval=FALSE}
+class8_index <- which(train_df$Class == 8)
+class8_txt <- train_df$txt[class8_index]
+#class7_1word_index <-which(str_count(class6_txt, "\\S+") == 1)
+#class6_txt <- class6_txt[-class6_1word_index]
+ng <- ngram (class8_txt , n =3)
+class8_trigram <-get.phrasetable(ng)
+
+
+class8_trigram <- class8_trigram %>%
+     filter(freq > 4)
+class8_trigram$in_txt_pct <- rep(0,nrow(class8_trigram))
+
+for (i in (1:nrow(class8_trigram))) {
+  in_txt <- grepl(class8_trigram$ngrams[i], class8_txt) %>% table %>% prop.table %>% as.numeric
+  class8_trigram$in_txt_pct[i] <- in_txt[2]
+}
+
+class8_trigram <- class8_trigram %>% arrange(desc(in_txt_pct))
+```
+
+```{r, echo=FALSE, eval=FALSE}
+class9_index <- which(train_df$Class == 9)
+class9_txt <- train_df$txt[class9_index]
+#class7_1word_index <-which(str_count(class6_txt, "\\S+") == 1)
+#class6_txt <- class6_txt[-class6_1word_index]
+ng <- ngram (class9_txt , n =3)
+class9_trigram <-get.phrasetable(ng)
+
+
+class9_trigram <- class9_trigram %>%
+     filter(freq > 12)
+class9_trigram$in_txt_pct <- rep(0,nrow(class9_trigram))
+
+for (i in (1:nrow(class9_trigram))) {
+  in_txt <- grepl(class9_trigram$ngrams[i], class9_txt) %>% table %>% prop.table %>% as.numeric
+  class9_trigram$in_txt_pct[i] <- in_txt[2]
+}
+
+class9_trigram <- class9_trigram %>% arrange(desc(in_txt_pct))
+```
+
+```{r, echo=FALSE, eval=FALSE}
+therest <- unique(c(class2_trigram$ngrams[1:5], class3_trigram$ngrams[1:5], class4_trigram$ngrams[1:5], class5_trigram$ngrams[1:5],class6_trigram$ngrams[1:5], class7_trigram$ngrams[1:5], class8_trigram$ngrams[1:5], class9_trigram$ngrams[1:5]))
+class1_unique <- which(! class1_trigram$ngrams %in% therest)
+class1_trigram_top3 <- class1_trigram[class1_unique, ] %>% 
+  arrange(desc(in_txt_pct))%>% 
+  head(3) 
+```
+
+```{r, echo=FALSE, eval=FALSE}
+therest <- unique(c(class1_trigram$ngrams[1:5], class3_trigram$ngrams[1:5], class4_trigram$ngrams[1:5], class5_trigram$ngrams[1:5],class6_trigram$ngrams[1:5], class7_trigram$ngrams[1:5], class8_trigram$ngrams[1:5], class9_trigram$ngrams[1:5]))
+class2_unique <- which(! class2_trigram$ngrams %in% therest)
+class2_trigram_top3 <- class2_trigram[class2_unique, ] %>% 
+  arrange(desc(in_txt_pct)) %>% 
+  head(3)
+```
+
+```{r, echo=FALSE, eval=FALSE}
+therest <- unique(c(class1_trigram$ngrams[1:5], class2_trigram$ngrams[1:5], class4_trigram$ngrams[1:5], class5_trigram$ngrams[1:5],class6_trigram$ngrams[1:5], class7_trigram$ngrams[1:5], class8_trigram$ngrams[1:5], class9_trigram$ngrams[1:5]))
+class3_unique <- which(! class3_trigram$ngrams %in% therest)
+class3_trigram_top3 <- class3_trigram[class3_unique, ] %>% 
+  arrange(desc(in_txt_pct)) %>% 
+  head(3)
+```
+
+```{r, echo=FALSE, eval=FALSE}
+therest <- unique(c(class1_trigram$ngrams[1:5], class2_trigram$ngrams[1:5], class3_trigram$ngrams[1:5], class5_trigram$ngrams[1:5],class6_trigram$ngrams[1:5], class7_trigram$ngrams[1:5], class8_trigram$ngrams[1:5], class9_trigram$ngrams[1:5]))
+class4_unique <- which(! class4_trigram$ngrams %in% therest)
+class4_trigram_top3 <- class4_trigram[class4_unique, ] %>% 
+  arrange(desc(in_txt_pct)) %>% 
+  head(3)
+```
+
+```{r, echo=FALSE, eval=FALSE}
+therest <- unique(c(class1_trigram$ngrams[1:5], class2_trigram$ngrams[1:5], class3_trigram$ngrams[1:5], class4_trigram$ngrams[1:5],class6_trigram$ngrams[1:5], class7_trigram$ngrams[1:5], class8_trigram$ngrams[1:5], class9_trigram$ngrams[1:5]))
+class5_unique <- which(! class5_trigram$ngrams %in% therest)
+class5_trigram_top3 <- class5_trigram[class5_unique, ] %>% 
+  arrange(desc(in_txt_pct)) %>% 
+  head(3)
+```
+
+```{r, echo=FALSE, eval=FALSE}
+therest <- unique(c(class1_trigram$ngrams[1:5], class2_trigram$ngrams[1:5], class3_trigram$ngrams[1:5], class4_trigram$ngrams[1:5],class5_trigram$ngrams[1:5], class7_trigram$ngrams[1:5], class8_trigram$ngrams[1:5], class9_trigram$ngrams[1:5]))
+class6_unique <- which(! class6_trigram$ngrams %in% therest)
+class6_trigram_top3 <- class6_trigram[class6_unique, ] %>% 
+  arrange(desc(in_txt_pct)) %>% 
+  head(3)
+```
+
+```{r, echo=FALSE, eval=FALSE}
+therest <- unique(c(class1_trigram$ngrams[1:5], class2_trigram$ngrams[1:5], class3_trigram$ngrams[1:5], class4_trigram$ngrams[1:5],class5_trigram$ngrams[1:5], class6_trigram$ngrams[1:5], class8_trigram$ngrams[1:5], class9_trigram$ngrams[1:5]))
+class7_unique <- which(! class7_trigram$ngrams %in% therest)
+class7_trigram_top3 <- class7_trigram[class7_unique, ] %>% 
+  arrange(desc(in_txt_pct)) %>% 
+  head(3)
+
+```
+
+```{r, echo=FALSE, eval=FALSE}
+therest <- unique(c(class1_trigram$ngrams[1:5], class2_trigram$ngrams[1:5], class3_trigram$ngrams[1:5], class4_trigram$ngrams[1:5],class5_trigram$ngrams[1:5], class6_trigram$ngrams[1:5], class7_trigram$ngrams[1:5], class9_trigram$ngrams[1:5]))
+class8_unique <- which(! class8_trigram$ngrams %in% therest)
+class8_trigram_top3 <- class8_trigram[class8_unique, ] %>% 
+  arrange(desc(in_txt_pct)) %>% 
+  head(3)
+```
+
+```{r, echo=FALSE, eval=FALSE}
+therest <- unique(c(class1_trigram$ngrams[1:5], class2_trigram$ngrams[1:5], class3_trigram$ngrams[1:5], class4_trigram$ngrams[1:5],class5_trigram$ngrams[1:5], class6_trigram$ngrams[1:5], class7_trigram$ngrams[1:5], class8_trigram$ngrams[1:5]))
+class9_unique <- which(! class9_trigram$ngrams %in% therest)
+class9_trigram_top3 <- class9_trigram[class8_unique, ] %>% 
+  arrange(desc(in_txt_pct)) %>% 
+  head(3)
+```
+
+```{r, echo = FALSE}
+trigram_top3_df <- read.csv("trigram_top3_df.csv", stringsAsFactors = F)
+trigram_top3_df$X1 <- NULL
+```
+
+```{r, eval= FALSE}
+trigram_top3_freq <-rbind(class1_trigram_top3, class2_trigram_top3,
+                  class3_trigram_top3, class4_trigram_top3, 
+                  class5_trigram_top3, class6_trigram_top3,
+                  class7_trigram_top3, class8_trigram_top3, 
+                  class9_trigram_top3)
+
+trigram_top3_df <- data.frame(keywords = trigram_top3_freq$ngrams, 
+                              in_txt_freq = trigram_top3_freq$in_txt_pct,
+                              class = rep(1:9, each =3))
+```
+
+```{r}
+trigram_top3_df
+```
+
+```{r}
+unique(trigram_top3_df$keywords)
+```
+
+```{r}
+ggplot(arrange(trigram_top3_df, class), 
+       aes(x = keywords, y = in_txt_freq, fill = factor(class))) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 3 Trigram in Each Class") +
+  ylab("Percentage of Occurance in Text") +
+  xlab("Keywords") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+# Modling
+## Feature Engineering
+### Character Count and Word Count
+```{r, eval=FALSE}
+combined_data$chr_count <- as.numeric(nchar(combined_data$txt))
+combined_data$words_count <- as.numeric(str_count(combined_data$txt, "\\S+"))
+```
+
+### tf-Idf
+```{r, eval=FALSE}
+combined_corpus <- VCorpus(VectorSource(combined_data$txt))
+dtm <- DocumentTermMatrix(combined_corpus, control = list(weighting = weightTfIdf))
+dtm <- removeSparseTerms(dtm, sparse = 0.95)
+```
+
+```{r, eval=FALSE}
+combined_data <- cbind(combined_data, as.matrix(dtm))
+```
+
+### Converting Genes and Variations into Numbers
+```{r, eval=FALSE}
+labelCountEncoding <- function(column){
+  return(match(column,levels(column)[order(summary(column,maxsum=nlevels(column)))]))
+}
+```
+
+```{r, eval=FALSE}
+combined_data$Gene <- labelCountEncoding(combined_data$Gene)
+combined_data$Variation <- labelCountEncoding(combined_data$Variation)
+```
+
+```{r, eval=FALSE, echo = FALSE}
+clean_txt_df <-  data.frame(text=unlist(sapply(combined_corpus, `[`, "content")), 
+    stringsAsFactors=F)
+
+dim(clean_txt_df)
+```
+
+```{r, eval=FALSE, echo = FALSE}
+combined_data$txt <- clean_txt_df$text
+```
+
+### ngram (trigram)
+```{r, eval=FALSE}
+trigram_keywords <- unique(trigram_top3_df$keywords)
+trigram_keywords
+```
+
+```{r, eval=FALSE}
+trigram_df <- matrix(0, ncol = 25, nrow = nrow(combined_data))
+trigram_df <- as.data.frame(trigram_df)
+for (i in (1:ncol(trigram_df))){
+  in_txt_index <- which(grepl(trigram_keywords[i], combined_data$txt))
+  trigram_df[in_txt_index,i] <- 1
+  trigram_df[-in_txt_index,i] <- 0
+  print(i)
+}
+```
+
+```{r, eval=FALSE}
+combined_data <- cbind(combined_data, trigram_df)
+```
+
+### Sentiment Scores
+```{r, eval=FALSE}
+combined_data$syuzhet_score <- get_sentiment(combined_data$txt, method = "syuzhet")
+combined_data$bing_score <- get_sentiment(combined_data$txt, method = "bing")
+combined_data$afinn_score <- get_sentiment(combined_data$txt, method = "afinn")
+combined_data$nrc_score <- get_sentiment(combined_data$txt, method = "nrc")
+```
+
+```{r, eval=FALSE}
+write_csv(combined_data, "modeling_df.csv")
+```
+
+```{r, eval=FALSE}
+clean_txt <- combined_data$txt
+combined_data$txt <- NULL
+```
+
+## Data Spliting
+```{r}
+combined_data$Class <- as.numeric(combined_data$Class)
+train_df <- combined_data[which(combined_data$Class > 0),]
+test_df <- combined_data[-c(which(combined_data$Class > 0)),]
+
+train_df$ID <- NULL
+test_ID <- test_df$ID
+test_df$ID <- NULL
+```
+
+## XGBoost
+```{r, eval=FALSE}
+train_df$Class <- as.numeric(train_df$Class)
+
+train_df$Class <- train_df$Class - 1
+
+train_label <- train_df$Class
+#train_df$Class <- NULL
+train_df_mat <- as.matrix(train_df[,-ncol(train_df)])
+train_df2 <-sapply(data.frame(train_df_mat),as.numeric)
+dtrain <- xgb.DMatrix(Matrix(as.matrix(train_df), sparse = TRUE), label = train_label)
+
+test_df_mat <- as.matrix(test_df)
+test_df2 <- sapply(data.frame(test_df_mat), as.numeric) 
+dtest <- xgb.DMatrix(Matrix(as.matrix(test_df2), sparse = TRUE))
+```
+
+```{r, eval=FALSE}
+param <- list(booster = "gbtree",
+              objective = "multi:softprob",
+              eval_metric = "mlogloss",
+              num_class = 9,
+              eta = .2,
+              gamma = 1,
+              max_depth = 5,
+              min_child_weight = 1,
+              subsample = .7,
+              colsample_bytree = .7
+)
+```
+
+```{r, eval=FALSE}
+set.seed(1234)
+cvFoldsList <- createFolds(combined_data$Class[combined_data$Class > -1], k=5, list=TRUE, returnTrain=FALSE)
+xgb_cv <- xgb.cv(data = dtrain,
+                 params = param,
+                 nrounds = 100,
+                 maximize = FALSE,
+                 prediction = TRUE,
+                 folds = cvFoldsList,
+                 print_every_n = 5,
+                 early_stop_round = 10
+)
+rounds <- which.min(xgb_cv$evaluation_log$test_mlogloss_mean)
+```
+
+```{r, eval=FALSE}
+xgb_model <- xgb.train(data = dtrain,
+                       params = param,
+                       watchlist = list(train = dtrain),
+                       nrounds = rounds,
+                       verbose = 1,
+                       print.every.n = 5
+)
+```
+
+
+```{r, eval=FALSE}
+names <- dimnames(train_df)[[2]]
+importance_matrix <- xgb.importance(names, model=xgb_model)
+xgb.plot.importance(importance_matrix[1:20])
+```
+
+```{r, eval=FALSE, echo=FALSE}
+preds <- as.data.table(t(matrix(predict(xgb_model, dtest), nrow=9, ncol=nrow(dtest))))
+colnames(preds) <- c("class1","class2","class3","class4","class5","class6","class7","class8","class9")
+write.table(data.table(ID=test_ID, preds), "submission.csv", sep=",", dec=".", quote=FALSE, row.names=FALSE)
+```
+
+### Current Kaggle Standing
+```{r, out.width='100%'}
+knitr::include_graphics('kaggle_current_standing.png')
+```
+
+
+```{r,eval=FALSE, echo = FALSE}
+train_preds <- as.data.table(t(matrix(predict(xgb_model, dtrain), nrow=9, ncol=nrow(dtrain))))
+colnames(train_preds) <- c("class1","class2","class3","class4","class5","class6","class7","class8","class9")
+write.table(data.table(ID=test_ID, preds), "train_pred.csv", sep=",", dec=".", quote=FALSE, row.names=FALSE)
+```
+
+```{r, eval = FALSE, echo = FALSE}
+train_preds_single <- rep(0, nrow(dtrain))
+for (i in (1:nrow(dtrain))) {
+  train_preds_single[i] <- which(train_preds[i] == max(train_preds[i])) 
+}
+
+train_pred_df <- data.frame(ID = train$ID, class_preds = train_preds_single)
+write.csv(train_pred_df, "train_pred_df.csv")
+```
+
+```{r}
+train_pred_df <- read.csv("train_pred_df.csv")
+confusionMatrix(train$Class, train_pred_df$class_preds)
+```
+
+
