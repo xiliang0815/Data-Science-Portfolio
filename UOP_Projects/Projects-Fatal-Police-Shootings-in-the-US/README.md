@@ -1,4 +1,4 @@
-#Objectives:
+# Objectives:
 The topic of excessive force and police brutality has been rampant recently in America, among all subtopics, police killing is among the most sensitive and most covered. The main purpose of this project is answer some of the questions I have in mind:
 * Is the police killing count increasing or decreasing?
 * How police killing correlate demographic information like income, high school completion rate, race distribution, etc?
