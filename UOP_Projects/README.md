@@ -18,5 +18,6 @@ of each project.
 		* By 11/18/2017: in-class presentation
 		
 * **Costumer Analytics**
+	* Project 1: Predicting Consumer's Choice on Commuting Options
 
 * **Time Series Analytics**
