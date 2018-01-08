@@ -13,4 +13,4 @@ Currently, this portfolio cotains these projects:
   2. Instacart Market Basket Analysis (Competition; finished top 33%)
   3. House Prices: Advanced Regression Techniques (Competition; finished top 28%)
   4. Personalized Medicine using NLP (Project)
-  5 Sberbank Russian Housing Market (Project)
+  5. Sberbank Russian Housing Market (Project)
