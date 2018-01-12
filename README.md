@@ -5,12 +5,13 @@ This is my data science portfolio that displays data science projects I have wor
 Currently, this portfolio cotains these projects:
 
 * University of the Pacific
-  1. Fatal Police Shootings in the US
-  2. Predicting Consumer Commute Choice using Logistic Regression and Decision Trees
+  - Fatal Police Shootings in the US
+  - Predicting Consumer Commute Choice using Logistic Regression and Decision Trees
+  - Predicting Customer Conversion Rate
 
 * Kaggle
-  1. Benz Greener Manufacturing (Competition; finished top 26%)
-  2. Instacart Market Basket Analysis (Competition; finished top 33%)
-  3. House Prices: Advanced Regression Techniques (Competition; finished top 28%)
-  4. Personalized Medicine using NLP (Project)
-  5. Sberbank Russian Housing Market (Project)
+  - Benz Greener Manufacturing (Competition; finished top 26%)
+  - Instacart Market Basket Analysis (Competition; finished top 33%)
+  - House Prices: Advanced Regression Techniques (Competition; finished top 28%)
+  - Personalized Medicine using NLP (Project)
+  - Sberbank Russian Housing Market (Project)
