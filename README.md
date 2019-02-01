@@ -15,3 +15,10 @@ Currently, this portfolio cotains these projects:
   - House Prices: Advanced Regression Techniques (Competition; finished top 28%)
   - Personalized Medicine using NLP (Project)
   - Sberbank Russian Housing Market (Project)
+
+* ML tool box
+  - Catboost
+  
+* Stock Investment tool box
+  - Info extractor
+  - Cup with the handle identifier
