@@ -18,6 +18,7 @@ Currently, this portfolio cotains these projects:
 
 * ML tool box
   - Catboost
+  - Random Forest
   
 * Stock Investment tool box
   - Info extractor
