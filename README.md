@@ -21,4 +21,4 @@ Currently, this portfolio cotains these projects:
   
 * Stock Investment tool box
   - Info extractor
-  - Cup with the handle identifier
+  - Cup with handle scanner
