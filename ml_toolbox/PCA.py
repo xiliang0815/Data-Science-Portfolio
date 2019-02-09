@@ -33,27 +33,33 @@ def calculate_vif(X, thresh=5.0):
     print(X.columns[variables])
     return X.iloc[:, variables]
 
-def PCA_w_scaler(X, threshold_by_component = True, n_components = 10,
-        threshold_by_variance=False, variance_sum_threshold=0.8):
+def PCA_w_scaler(X, threshold_by_component = True, n_components = 10, 
+                 threshold_by_variance=False, variance_sum_threshold=0.8):
+    #initiate scaler and apply scaler on input X df
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    if threshold_by_variance==True & threshold_by_component==False:
-        pca = PCA(n_components = X.shape[1])
+    #initate PCA process by meeting variance threshold
+    if threshold_by_component==False:
+        pca = PCA(n_components = X_scaled.shape[1])
         pca.fit(X_scaled)
-        variance_sum = sum(pca.explained_variance_ratio_)
-        if variance_sum < variance_sum_threshold:
-            print("The sum of variance is {:.3f} and does not meet the threshold requirement.".format(variance_sum))
-    else:
-        #dont have to return everything 
-        return(pd.DataFrame(pca.fit_transform(X_scaled), columns=list('pc_' + pd.Series(np.arange(1, n_components+1)).astype('str'))))
+        variance_ratio_cumsum = np.cumsum(pca.explained_variance_ratio_)
+        #find the number of component needed to reach the specified threshold
+        num_comp_to_reach_variance_threshold = np.where(variance_ratio_cumsum>=variance_sum_threshold)[0][0]
+        
+        #run PCA again with the number of component above
+        pca = PCA(n_components=num_comp_to_reach_variance_threshold)
+        pca.fit(X_scaled)
+        return(pd.DataFrame(pca.fit_transform(X_scaled), 
+                            columns=list('pc_' + pd.Series(np.arange(1, num_comp_to_reach_variance_threshold+1)).astype('str'))))
 
 
-
+    #initiate PCA process by meeting component threshold
     elif threshold_by_component == True:
         pca = PCA(n_components=n_components)
         pca.fit(X_scaled)
         variance_sum = sum(pca.explained_variance_ratio_)
         print("The sum of variance is {:.3f}.".format(variance_sum))
-        return(pd.DataFrame(pca.fit_transform(X_scaled), columns=list('pc_' + pd.Series(np.arange(1, n_components+1)).astype('str'))))
+        return(pd.DataFrame(pca.fit_transform(X_scaled), 
+               columns=list('pc_' + pd.Series(np.arange(1, n_components+1)).astype('str'))))
 
