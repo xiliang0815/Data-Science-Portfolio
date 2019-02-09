@@ -18,9 +18,10 @@ Currently, this portfolio cotains these projects:
 
 * ML tool box
   - Catboost
-  - Random Forest
   - PCA with preprocessing functions
     * Preprocessing functions includes fuctions look for features with high count of zeros, as well as filter by VIF function to avoid features with high collinearity.
+  - t-SNE
+  - Random Forest
   
 * Stock Investment tool box
   - Info extractor
