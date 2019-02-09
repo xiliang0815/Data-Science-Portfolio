@@ -2,6 +2,7 @@ import pandas as pd
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 
 def filter_high_zeros_count(X, threshold = 0.8, impute_with_zeros=True):
     numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
@@ -62,4 +63,10 @@ def PCA_w_scaler(X, threshold_by_component = True, n_components = 10,
         print("The sum of variance is {:.3f}.".format(variance_sum))
         return(pd.DataFrame(pca.fit_transform(X_scaled), 
                columns=list('pc_' + pd.Series(np.arange(1, n_components+1)).astype('str'))))
+
+def tsne(X, n_components = 4, verbose = 1, perplexity = 50, n_iter = 1000, method = barnes_hut):
+    #time_start = time.time()
+    tsne = TSNE(n_components= n_components, verbose= verbose, perplexity=perplexity, n_iter=n_iter, method = method)
+    tsne_results = tsne.fit_transform(X)
+    return(tsne_results)
 
