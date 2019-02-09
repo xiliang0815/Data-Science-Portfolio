@@ -64,7 +64,7 @@ def PCA_w_scaler(X, threshold_by_component = True, n_components = 10,
         return(pd.DataFrame(pca.fit_transform(X_scaled), 
                columns=list('pc_' + pd.Series(np.arange(1, n_components+1)).astype('str'))))
 
-def tsne(X, n_components = 4, verbose = 1, perplexity = 50, n_iter = 1000, method = barnes_hut):
+def tsne(X, n_components = 4, verbose = 1, perplexity = 50, n_iter = 1000, method = 'barnes_hut'):
     #time_start = time.time()
     tsne = TSNE(n_components= n_components, verbose= verbose, perplexity=perplexity, n_iter=n_iter, method = method)
     tsne_results = tsne.fit_transform(X)
