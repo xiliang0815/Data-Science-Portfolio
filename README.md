@@ -22,6 +22,11 @@ Currently, this portfolio cotains these projects:
     * Preprocessing functions includes fuctions look for features with high count of zeros, as well as filter by VIF function to avoid features with high collinearity.
   - t-SNE
   - Random Forest
+  - Clustering
+    * K-means
+    * DBSCAN
+    * Elbow Method
+    * Silhouette score
   
 * Stock Investment tool box
   - Info extractor
