@@ -1,7 +1,13 @@
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
+
 from sklearn.cluster import KMeans
+from sklearn.cluster import DBSCAN
+from sklearn.neighbors import NearestNeighbors
+from kneed import DataGenerator, KneeLocator
+
 from sklearn import metrics
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -14,10 +20,14 @@ def preprocessing(X, ohe=True, cat_features='auto'):
             X_cat = X[cat_features_cols]
             X_cat_df_ohe = ohe_preprocessing(X_cat)
             return(X_cat_df_ohe)
+
     elif (ohe==True) & (type(cat_features)==list):
         cat_features_cols_input = cat_features
         X_cat = X[cat_features_cols_input]
         X_cat_df_ohe = ohe_preprocessing(X_cat)
+
+    elif ohe==False:
+    	next
     
     numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
     X_num = X.select_dtypes(include=numerics)
@@ -36,6 +46,20 @@ def num_preprocessing(X_num_df, col_names, remove_high_zeros=False, remove_high_
 def ohe_preprocessing(X_cat_df):
     X_cat_df_ohe = pd.get_dummies(X_cat_df)
     return(X_cat_df_ohe)
+
+def calculate_dbscan_eps(X_preprocessed, n_neighbours = 100):
+	nbrs = NearestNeighbors(n_neighbors= n_neighbours, algorithm='ball_tree').fit(X_preprocessed)
+	distances, indices = nbrs.kneighbors(X_preprocessed)
+	distance_df = pd.DataFrame(distances)
+
+	avg_dist_df = pd.DataFrame(distance_df.apply(lambda x: x.mean())).reset_index()
+	avg_dist_df.columns = ['clst', 'avg_dist']
+
+	kneedle = KneeLocator(avg_dist_df['clst'], avg_dist_df['avg_dist'], S=1.0, curve='concave', direction='increasing')
+	best_clst = kneedle.knee
+	eps_value = avg_dist_df[avg_dist_df['clst'] == best_clst]['avg_dist'].values[0]
+	return(eps_value)
+
 
 def clustering(X_preprocessed, method='kmeans', on_pca=False, pick_best=False,
                cluster_min=1, cluster_max=10, step=1):
@@ -64,10 +88,12 @@ def clustering(X_preprocessed, method='kmeans', on_pca=False, pick_best=False,
             
             kmeans = KMeans(n_clusters=best_clst, random_state=123).fit(X_preprocessed)
             clst_pred = kmeans.predict(X_preprocessed)
-            X_preprocessed['clst'] = clst_pred
+
+            output_df = X_preprocessed
+            output_df['clst'] = clst_pred
             
             print("The best average Silhouette score was {:.3f} at cluster {}.".format(best_score, best_clst))
-            return(X_preprocessed)
+            return(output_df)
             
         elif type(pick_best)==int:
             kmeans = KMeans(n_clusters=pick_best, random_state=123).fit(X_preprocessed)
@@ -75,5 +101,6 @@ def clustering(X_preprocessed, method='kmeans', on_pca=False, pick_best=False,
             X_preprocessed['clst'] = clst_pred
             return(X_preprocessed)
         
-    #elif method == 'dbscan':
+    elif method == 'dbscan':
+    	#determine eps using knn and min_sample using silhouette score
     #elif method == 'gaussian_mixture':
