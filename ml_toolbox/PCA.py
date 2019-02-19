@@ -1,5 +1,5 @@
 """
-Functions related to performing dimension reduction via PCA.
+Functions relate to performing dimension reduction via PCA.
 
 Author: Xi Liang
 Email: xiliang0815@gmail.com

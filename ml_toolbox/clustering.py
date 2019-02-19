@@ -1,3 +1,20 @@
+"""
+Functions relate to performing clustering with different methods
+
+Author: Xi Liang
+Email: xiliang0815@gmail.com
+Version: 1.0
+
+Dependencies
+-------------
+pandas
+statsmodels
+kneed
+sklearn
+matplotlib
+seaborn
+"""
+import PCA
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
@@ -47,6 +64,8 @@ def ohe_preprocessing(X_cat_df):
     X_cat_df_ohe = pd.get_dummies(X_cat_df)
     return(X_cat_df_ohe)
 
+def kmeans(X_preprocessed):
+
 def calculate_dbscan_eps(X_preprocessed, n_neighbours = 100):
 	nbrs = NearestNeighbors(n_neighbors= n_neighbours, algorithm='ball_tree').fit(X_preprocessed)
 	distances, indices = nbrs.kneighbors(X_preprocessed)
@@ -94,10 +113,33 @@ def cluster_dbscan(X_preprocessed, dbscan_unique_clst = 10, dbscan_init_clst_num
 
 	return(output_df, best_score)
 
-def clustering(X_preprocessed, method='kmeans', on_pca=False, pick_best=False,
-               cluster_min=1, cluster_max=10, step=1,
+def clustering(X_preprocessed, method='kmeans', on_pca=False, pca_zero_threshold = 0.8, vif_threshold = 5, pca_variance_sum_threshold = 0.8,
+               pick_best=False, cluster_min=1, cluster_max=10, step=1,
                dbscan_unique_clst = 10, dbscan_init_clst_num =2, dbscan_n_iter = 20):
 
+    if on_pca == True:
+        working_df = X_preprocessed.copy()
+        working_df = filter_high_zeros_count(working_df, threshold=pca_zero_threshold)
+        working_df = calculate_vif(working_df threshold=vif_threshold)
+        working_df = PCA_w_scaler(working_df, threshold_by_component=False, variance_sum_threshold=pca_variance_sum_threshold)
+
+        if method == "kmeans":
+
+        elif method = 'dbscan':
+            score, output_df = cluster_dbscan(X_preprocessed, dbscan_unique_clst=dbscan_unique_clst, 
+                                              dbscan_init_clst_num=dbscan_init_clst_num , dbscan_n_iter = dbscan_n_iter)
+            return(score, output_df)
+
+    elif on_pca == False
+        working_df = X_preprocessed.copy()
+
+        if method == "kmeans":
+
+        elif method == 'dbscan':
+            score, output_df = cluster_dbscan(X_preprocessed, dbscan_unique_clst=dbscan_unique_clst, 
+                                              dbscan_init_clst_num=dbscan_init_clst_num , dbscan_n_iter = dbscan_n_iter)
+            return(score, output_df)
+            
     if method == 'kmeans':
         if pick_best == False:
             elbow_df = pd.DataFrame(columns=['clst', 'sse'])
